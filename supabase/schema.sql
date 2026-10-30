@@ -190,6 +190,8 @@ begin
   foreach t in array array['trips','loyalty_programs','budget_items','quotes','bookings','payments','expenses','itinerary_items','redemptions','attachments','audit_logs'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('alter table public.%I force row level security', t);
+    -- se 003_compartilhamento.sql já foi aplicado, as políticas por papel ficam como estão
+    if exists (select 1 from pg_policies where schemaname = 'public' and tablename = t and policyname = 'membro_select') then continue; end if;
     execute format('drop policy if exists "proprio_select" on public.%I', t);
     execute format('drop policy if exists "proprio_insert" on public.%I', t);
     execute format('drop policy if exists "proprio_update" on public.%I', t);

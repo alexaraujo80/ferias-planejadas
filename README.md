@@ -131,13 +131,40 @@ O plano anual equivale a 10 meses (2 meses grátis). Toda conta nova recebe **14
 
 Cartão de crédito Visa e Mastercard e boleto funcionam na assinatura com renovação automática. O Pix fica disponível no plano anual como **pagamento único de 12 meses**, sem renovação automática, porque o Pix recorrente (Pix Automático) não está disponível para contas Stripe no Brasil. Amex, Elo e Hipercard não são aceitos pelo Stripe no Brasil.
 
+## Viagens compartilhadas em família (plano Família)
+
+O organizador convida até 5 pessoas por viagem (6 no total). Cada uma usa a própria conta, no próprio celular. Os convidados podem ter conta gratuita.
+
+| Papel | Pode |
+| --- | --- |
+| Organizador | Tudo: convidar, mudar papéis, remover pessoas, arquivar e excluir a viagem |
+| Editor | Editar orçamento, cotações, pagamentos, roteiro, documentos e despesas |
+| Participante | Lançar despesas e atividades e alterar as próprias; consultar o restante |
+| Leitor | Somente consultar |
+
+**Como convidar:** em *Minhas viagens*, toque no ícone de pessoas no cartão da viagem, escolha o papel e gere o link. Ele pode ser copiado ou enviado pelo WhatsApp, vale 7 dias e serve para uma pessoa. Quem abre o link e ainda não tem conta cria uma; o convite é aceito automaticamente após o login.
+
+**Despesas privadas:** as despesas em *Compras e lembranças* e *Emergências* nascem privadas, e qualquer despesa pode ser marcada ou desmarcada como privada. Uma despesa privada só é visível para quem a cadastrou, inclusive em relação ao organizador. Os demais recebem apenas a soma, exibida como *Gastos pessoais (privados)*, para que o orçamento da família continue correto. Ela não entra no acerto de contas. A regra é aplicada pelo banco (RLS): os aparelhos dos outros membros não recebem esses registros.
+
+**O que continua pessoal:** clubes de benefícios, pontos e milhas, e as outras viagens de cada um.
+
+**Se o organizador sair do plano Família**, os convidados passam a apenas consultar a viagem. Nada é apagado, e tudo volta ao normal quando ele assinar de novo.
+
+**Atualização ao vivo:** o que um membro lança aparece para os outros em segundos (Supabase Realtime). O histórico registra quem fez cada alteração.
+
+### Instalação
+
+No SQL Editor do Supabase, execute `supabase/003_compartilhamento.sql` depois dos scripts 1 e 2. Ordem completa para uma instalação nova: `schema.sql`, `002_planos_stripe.sql`, `003_compartilhamento.sql`. Todos podem ser executados de novo sem perder dados.
+
 ## Próximos passos (Fase 3)
 
 | Tema | Situação |
 | --- | --- |
 | Planos, limites, teste grátis e Stripe | Implementado |
 | Várias adesões por clube e conta da mesa com vários pares | Implementado |
-| Viagens compartilhadas (convites, papéis, atualização ao vivo) | Próxima etapa |
+| Categorias e calculadoras de carro e cruzeiro | Implementado |
+| Viagens compartilhadas, papéis, convites e despesas privadas | Implementado |
+| Leitor sem acesso aos valores financeiros | Planejado |
 | Anexos em arquivo (Supabase Storage privado) | Planejado |
 | Login com Google, MFA | Planejado |
 | Área administrativa, Sentry, Vercel Analytics | Planejado |

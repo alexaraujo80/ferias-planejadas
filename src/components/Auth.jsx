@@ -21,6 +21,7 @@ export default function Auth({ supabase, recovery, onRecovered }) {
   const m = recovery ? "nova" : mode;
   const [email, setEmail] = useState(""); const [pw, setPw] = useState(""); const [pw2, setPw2] = useState("");
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(null);
+  const hasInvite = (() => { try { return !!localStorage.getItem("fp-convite"); } catch (e) { return false; } })();
   const go = (x) => { setMode(x); setMsg(null); setPw(""); setPw2(""); };
 
   const submit = async (e) => {
@@ -50,6 +51,7 @@ export default function Auth({ supabase, recovery, onRecovered }) {
         <div className="logo" style={{ padding: 0 }}><div className="logo-mark" style={{ background: "#DDF4FA" }}><Sun size={20} /></div><div><b style={{ color: "#173A4A" }}>Férias Planejadas</b><small style={{ color: "#5C7884" }}>planejar, comparar, aproveitar</small></div></div>
         <h1 className="serif">{title}</h1>
         <p className="muted" style={{ margin: 0 }}>{sub}</p>
+        {hasInvite && m !== "nova" && <div className="alert blue" style={{ marginTop: 14 }}><CheckCircle2 size={15} color="#167D9A" /><span>Você recebeu um convite para uma viagem compartilhada. Entre ou crie sua conta gratuita para participar.</span></div>}
         <form onSubmit={submit} noValidate>
           {m !== "nova" && <div className="fld"><label><span className="lb">E-mail</span><input className="inp" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus /></label></div>}
           {m !== "recuperar" && <div className="fld"><label><span className="lb">{m === "nova" ? "Nova senha" : "Senha"}</span><input className="inp" type="password" autoComplete={m === "entrar" ? "current-password" : "new-password"} value={pw} onChange={(e) => setPw(e.target.value)} /></label></div>}

@@ -214,3 +214,6 @@ input[type=range]{accent-color:#167D9A;width:100%}
 .faq p{margin:4px 0 0;font-size:13px;color:var(--muted)}
 .faq b{font-size:13.5px}
 @media(max-width:900px){.memrow{grid-template-columns:1fr 1fr}.memrow>input:first-child{grid-column:1/-1}.memhead{display:none}}
+
+/* Compartilhamento: ações ocultas conforme o papel na viagem */
+.ro .act{display:none!important}

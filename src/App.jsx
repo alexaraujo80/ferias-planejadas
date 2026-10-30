@@ -81,7 +81,10 @@ const CRIT = [
   { k: "services", l: "Serviços incluídos" }, { k: "payment", l: "Condições de pagamento" },
   { k: "flex", l: "Flexibilidade e cancelamento" }, { k: "rating", l: "Avaliação pessoal" },
 ];
-const EMPTY = { trips: [], items: [], quotes: [], bookings: [], payments: [], expenses: [], itinerary: [], programs: [], redemptions: [], docs: [], log: [], activeTripId: null };
+const EMPTY = { trips: [], items: [], quotes: [], bookings: [], payments: [], expenses: [], itinerary: [], programs: [], redemptions: [], docs: [], log: [], activeTripId: null, shared: {} };
+// Despesas destas categorias nascem privadas em viagens compartilhadas (podem ser alteradas em cada despesa).
+const PRIVATE_CATS = ["Compras e lembranças", "Emergências"];
+const PRIVATE_LABEL = "Gastos pessoais (privados)";
 
 const travelers = (t) => (Number(t.adults) || 0) + (Number(t.children) || 0);
 const tripDays = (t) => {
@@ -94,7 +97,8 @@ const effStatus = (p) => {
   if (p.dueDate && p.dueDate < todayISO()) return "atrasado";
   return p.status;
 };
-const withLog = (st, tripId, text) => ({ ...st, log: [{ id: uid(), tripId, text, at: new Date().toISOString() }, ...(st.log || [])].slice(0, 200) });
+let ACTOR = ""; // e-mail de quem está usando, registrado no histórico das viagens compartilhadas
+const withLog = (st, tripId, text) => ({ ...st, log: [{ id: uid(), tripId, text, at: new Date().toISOString(), by: ACTOR }, ...(st.log || [])].slice(0, 200) });
 
 // ---------- Fase 2: roteiro tipado, benefícios, divisão de despesas ----------
 const ITIN_TYPES = [["restaurante", "Restaurante"], ["passeio", "Passeio"], ["praia", "Praia"], ["atracao", "Atração"], ["deslocamento", "Deslocamento"], ["hospedagem", "Hospedagem"], ["escala", "Escala do cruzeiro"], ["outro", "Outro"]];
@@ -145,7 +149,7 @@ function splitEqual(total, people) { if (!people.length) return []; const base =
 function settlement(exps, people) {
   const paid = {}, share = {}; people.forEach((p) => { paid[p] = 0; share[p] = 0; });
   let unknown = 0;
-  exps.filter((e) => REAL_ST.includes(e.status)).forEach((e) => {
+  exps.filter((e) => REAL_ST.includes(e.status) && !e.private).forEach((e) => {
     const amt = num(e.amount) || 0;
     if (!e.person) { unknown = r2(unknown + amt); return; }
     paid[e.person] = r2((paid[e.person] || 0) + amt);
@@ -180,18 +184,22 @@ function metrics(s, trip) {
   const estimated = sum(items, (i) => i.estimated);
   const contracted = sum(items, (i) => i.contracted);
   const realExp = exps.filter((e) => ["realizada", "paga", "pendente"].includes(e.status));
-  const expenseTotal = sum(realExp, (e) => e.amount);
+  // Despesas privadas de outros membros: só a soma chega (my_shared_context), nunca os detalhes.
+  const pv = s.shared?.[T]?.private_totals || {};
+  const pvReal = num(pv.realized) || 0, pvPaid = num(pv.paid) || 0, pvPend = num(pv.pending) || 0;
+  const expenseTotal = r2(sum(realExp, (e) => e.amount) + pvReal);
   const committed = r2(contracted + expenseTotal);
   const activePays = pays.filter((p) => p.status !== "cancelado");
   const paidPays = sum(pays.filter((p) => p.status === "pago"), (p) => p.amount);
-  const paidExp = sum(exps.filter((e) => e.status === "paga"), (e) => e.amount);
+  const paidExp = r2(sum(exps.filter((e) => e.status === "paga"), (e) => e.amount) + pvPaid);
   const paid = r2(paidPays + paidExp);
-  const pendingExp = sum(exps.filter((e) => e.status === "pendente" || e.status === "realizada"), (e) => e.amount);
+  const pendingExp = r2(sum(exps.filter((e) => e.status === "pendente" || e.status === "realizada"), (e) => e.amount) + pvPend);
   const toPay = r2(Math.max(0, contracted - paidPays) + pendingExp);
   const byCat = {};
   CATS.forEach((c) => (byCat[c] = { est: 0, con: 0, exp: 0 }));
   items.forEach((i) => { const c = byCat[i.category] || (byCat[i.category] = { est: 0, con: 0, exp: 0 }); c.est = r2(c.est + (num(i.estimated) || 0)); c.con = r2(c.con + (num(i.contracted) || 0)); });
   realExp.forEach((e) => { const c = byCat[e.category] || (byCat[e.category] = { est: 0, con: 0, exp: 0 }); c.exp = r2(c.exp + (num(e.amount) || 0)); });
+  if (pvReal) byCat[PRIVATE_LABEL] = { est: 0, con: 0, exp: pvReal };
   const remainingPlanned = r2(Object.values(byCat).reduce((a, c) => a + Math.max(0, c.est - (c.con + c.exp)), 0));
   const projected = r2(committed + remainingPlanned);
   const paidByItem = {}, schedByItem = {};
@@ -209,7 +217,7 @@ function metrics(s, trip) {
   const savPoints = sum((s.redemptions || []).filter((r) => r.tripId === T && r.used), (r) => r.cashSaving);
   const savDiscount = bookedQuote ? num(bookedQuote.discount) || 0 : 0;
   return {
-    itin, savBenefit, savPlanned, savPoints, savDiscount,
+    itin, savBenefit, savPlanned, savPoints, savDiscount, pvReal,
     items, pays, activePays, exps, realExp, quotes, booking, bookedQuote, budget, estimated, contracted, expenseTotal,
     committed, paidPays, paid, toPay, balance: r2(budget - committed), projected, remainingPlanned,
     deviation: r2(committed - estimated), execution: pct(paid, committed), byCat, paidByItem, schedByItem, bestQuote,
@@ -439,7 +447,8 @@ const SUBTITLE = {
   despesas: "Registro rápido dos gastos", beneficios: "Clubes de desconto, pontos e milhas", balanco: "Planejado versus realizado", planos: "Escolha o plano ideal para as suas viagens", config: "Dados, exportações e demonstração",
 };
 
-function AppInner({ store, account, onSignOut }) {
+function AppInner({ store, account, onSignOut, me = "local" }) {
+  ACTOR = account || "";
   const [s, setS] = useState(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [persist, setPersist] = useState("idle");
@@ -471,6 +480,11 @@ function AppInner({ store, account, onSignOut }) {
     setPersist("saving");
     const h = setTimeout(async () => {
       const res = await store.save(s);
+      if (res && res.denied) {
+        const r = await store.load(); if (r.ok && r.data) setS({ ...EMPTY, ...r.data });
+        setPersist("saved"); toast("Seu papel nesta viagem compartilhada não permite essa alteração. Os dados foram recarregados.", "err");
+        return;
+      }
       if (res && res.limit) {
         // O banco recusou por limite do plano: volta ao estado confirmado e explica.
         const r = await store.load(); if (r.ok && r.data) setS({ ...EMPTY, ...r.data });
@@ -485,7 +499,7 @@ function AppInner({ store, account, onSignOut }) {
 
   useEffect(() => {
     if (persist !== "memory" || store.mode !== "cloud" || !loaded) return;
-    const h = setTimeout(async () => { const ok = await store.save(sRef.current); if (ok === true || ok?.limit) setPersist("saved"); else setRetry((x) => x + 1); }, 8000);
+    const h = setTimeout(async () => { const ok = await store.save(sRef.current); if (ok === true || ok?.limit || ok?.denied) setPersist("saved"); else setRetry((x) => x + 1); }, 8000);
     return () => clearTimeout(h);
   }, [persist, loaded, store, retry]);
   useEffect(() => {
@@ -514,6 +528,35 @@ function AppInner({ store, account, onSignOut }) {
     return () => clearInterval(t);
   }, []); // eslint-disable-line
 
+  // Convite pendente (link ?convite=…): aceito assim que os dados carregam.
+  useEffect(() => {
+    if (!loaded || store.mode !== "cloud") return;
+    let tok = null; try { tok = localStorage.getItem("fp-convite"); } catch (e) { /* sem acesso */ }
+    if (!tok) return;
+    try { localStorage.removeItem("fp-convite"); } catch (e) { /* ignore */ }
+    (async () => {
+      try {
+        const r = await store.call("accept_invite", { p_token: tok });
+        const d = await store.load(); if (d.ok) setS({ ...EMPTY, ...d.data, activeTripId: r.trip_id });
+        setPage("dashboard"); toast(`Você entrou na viagem “${r.name || "compartilhada"}” como ${ROLE_LABEL[r.role] || "participante"}.`);
+      } catch (e) { toast(shareErr(e), "err"); }
+    })();
+  }, [loaded]); // eslint-disable-line
+  // Atualização ao vivo: qualquer alteração de outro membro recarrega a viagem (se não houver edição local pendente).
+  useEffect(() => {
+    if (!store.subscribe) return;
+    let t;
+    const off = store.subscribe(() => {
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        if (persistRef.current !== "saved") return;
+        const r = await store.load();
+        if (r.ok && r.data && persistRef.current === "saved") setS({ ...EMPTY, ...r.data });
+      }, 1200);
+    });
+    return () => { clearTimeout(t); off(); };
+  }, [store]);
+
   const activeTrips = s.trips.filter((t) => !t.archived);
   const trip = s.trips.find((t) => t.id === s.activeTripId) || activeTrips[0] || null;
   const m = useMemo(() => (trip ? metrics(s, trip) : null), [s, trip]);
@@ -525,12 +568,21 @@ function AppInner({ store, account, onSignOut }) {
   const ask = (o) => setConfirm(o);
   const setActive = (id) => update((st) => ({ ...st, activeTripId: id }));
   const go = (p) => { setPage(p); setMenu(false); try { window.scrollTo(0, 0); } catch (e) { } };
+  const shInfo = trip ? s.shared?.[trip.id] : null;
+  const tripMine = !trip || !trip._owner || trip._owner === me;
+  const role = !trip || tripMine ? "owner" : shInfo?.my_role || "leitor";
+  const canPlan = role === "owner" || role === "editor";
+  const canAct = role !== "leitor";
+  const sharedTrip = !!shInfo && (shInfo.members || []).length > 1;
+  const myTraveler = (shInfo?.members || []).find((x) => x.member_id === me)?.traveler_name || "";
+  const reload = async () => { const r = await store.load(); if (r.ok && r.data) setS({ ...EMPTY, ...r.data }); };
   const guard = (kind, current = 0) => {
+    if (kind === "quotes" && !tripMine) return true; // na viagem de outra pessoa, vale o plano do organizador (o banco confere)
     const info = LIMITS[kind]; const L = plan?.limits; if (!info || !L) return true;
     const ok = info.flag ? !!L[info.flag] : L[info.key] == null || current < L[info.key];
     if (!ok) setUpgrade({ kind }); return ok;
   };
-  const ctx = { s, update, trip, m, toast, ask, go, setActive, storeMode: store.mode, account, onSignOut, plan, refreshPlan, guard };
+  const ctx = { s, update, trip, m, toast, ask, go, setActive, storeMode: store.mode, account, onSignOut, plan, refreshPlan, guard, me, role, canPlan, canAct, tripMine, sharedTrip, myTraveler, rpc: store, reload };
   const loadDemo = () => {
     if (s.trips.some((t) => t.demo)) { toast("A demonstração já está carregada", "info"); return; }
     const d = buildDemo();
@@ -579,12 +631,13 @@ function AppInner({ store, account, onSignOut }) {
           <button className="ib show-m" onClick={() => setMenu(true)} aria-label="Abrir menu"><Menu size={20} /></button>
           <div style={{ flex: 1, minWidth: 0 }}>
             <h1 className="serif">{navItem?.l}</h1>
-            <div className="sub hide-m">{SUBTITLE[page]}{trip && needsTrip ? ` — ${trip.name}` : ""}</div>
+            <div className="sub hide-m">{SUBTITLE[page]}{trip && needsTrip ? ` — ${trip.name}` : ""}{trip && needsTrip && !tripMine ? `, você é ${ROLE_LABEL[role]}` : ""}</div>
           </div>
           {trip && <GlobalSearch s={s} trip={trip} go={go} />}
         </header>
         <div className="content">
           {migrate && <div className="banner"><Upload size={18} color="#167D9A" /><span style={{ flex: 1 }}>Encontramos {migrate.trips?.length || 0} viagem(ns) salva(s) neste navegador. Quer enviá-las para a sua conta na nuvem?</span><button className="btn sm" onClick={() => setMigrate(null)}>Agora não</button><button className="btn sm pri" onClick={() => { update(() => ({ ...EMPTY, ...migrate })); setMigrate(null); toast("Dados do navegador enviados para a sua conta"); }}>Enviar para a conta</button></div>}
+          {loaded && trip && needsTrip && (role === "leitor" || (!canPlan && ["planejamento", "cotacoes", "pagamentos"].includes(page))) && <div className="banner"><Lock size={16} color="#167D9A" /><span style={{ flex: 1 }}>{role === "leitor" ? "Você acompanha esta viagem como Leitor: pode consultar tudo, sem alterar." : "Nesta viagem, quem altera orçamento, cotações e pagamentos é o organizador ou um editor. Você pode lançar despesas e atividades."}</span></div>}
           {body}
         </div>
       </main>
@@ -641,7 +694,7 @@ function GlobalSearch({ s, trip, go }) {
 }
 
 // ---------- Dashboard ----------
-function Dashboard({ s, trip, m, go }) {
+function Dashboard({ s, trip, m, go, sharedTrip }) {
   const today = todayISO(); const d = tripDays(trip); const tv = travelers(trip);
   const until = trip.startDate ? diffDays(today, trip.startDate) : null;
   const alerts = getAlerts(s, trip, m);
@@ -692,6 +745,7 @@ function Dashboard({ s, trip, m, go }) {
           <div className="row" style={{ marginTop: 16, gap: 18, fontSize: 13.5, color: "#2F5566" }}>
             <span><CalendarClock size={14} style={{ verticalAlign: -2 }} /> {fdate(trip.startDate)} a {fdate(trip.endDate)}{d ? ` (${d.days} dias, ${d.nights} noites)` : ""}</span>
             <span><Users size={14} style={{ verticalAlign: -2 }} /> {tv} viajante(s)</span>
+            {sharedTrip && <span><Lock size={13} style={{ verticalAlign: -2 }} /> compartilhada com {s.shared[trip.id].members.length} pessoas</span>}
           </div>
           <div style={{ marginTop: 22, maxWidth: 380 }}>
             <div className="row between" style={{ fontSize: 13, marginBottom: 6 }}><span>Orçamento comprometido</span><b>{m.budget ? fpct(comm) : "sem orçamento"}</b></div>
@@ -798,8 +852,10 @@ function TripForm({ initial, onSave, onClose }) {
   );
 }
 
-function TripsPage({ s, update, toast, ask, setActive, go, trip: active, autoNew, clearAutoNew, loadDemo, guard = () => true }) {
-  const activeCount = s.trips.filter((t) => !t.archived && !t.demo).length;
+function TripsPage({ s, update, toast, ask, setActive, go, trip: active, autoNew, clearAutoNew, loadDemo, guard = () => true, me = "local", storeMode, rpc, reload }) {
+  const isMine = (t) => !t._owner || t._owner === me;
+  const activeCount = s.trips.filter((t) => !t.archived && !t.demo && isMine(t)).length;
+  const [share, setShare] = useState(null);
   const [edit, setEdit] = useState(autoNew ? {} : null);
   const [arch, setArch] = useState(false);
   useEffect(() => { if (autoNew) clearAutoNew(); }, []); // eslint-disable-line
@@ -810,8 +866,8 @@ function TripsPage({ s, update, toast, ask, setActive, go, trip: active, autoNew
     setEdit(null);
   };
   const duplicate = (t) => {
-    const nt = { ...t, id: uid(), name: `Cópia de ${t.name}`.replace("[DEMO] ", ""), demo: false, archived: false, status: "planejando", createdAt: new Date().toISOString() };
-    update((st) => withLog({ ...st, trips: [...st.trips, nt], items: [...st.items, ...st.items.filter((i) => i.tripId === t.id).map((i) => ({ ...i, id: uid(), tripId: nt.id, demo: false, contracted: "", bookingId: null }))], activeTripId: nt.id }, nt.id, `Viagem duplicada a partir de ${t.name}`));
+    const nt = { ...t, _owner: undefined, id: uid(), name: `Cópia de ${t.name}`.replace("[DEMO] ", ""), demo: false, archived: false, status: "planejando", createdAt: new Date().toISOString() };
+    update((st) => withLog({ ...st, trips: [...st.trips, nt], items: [...st.items, ...st.items.filter((i) => i.tripId === t.id).map((i) => ({ ...i, _by: undefined, id: uid(), tripId: nt.id, demo: false, contracted: "", bookingId: null }))], activeTripId: nt.id }, nt.id, `Viagem duplicada a partir de ${t.name}`));
     toast("Viagem duplicada como modelo (itens previstos copiados, sem cotações e pagamentos)");
   };
   const del = (t) => ask({
@@ -835,11 +891,12 @@ function TripsPage({ s, update, toast, ask, setActive, go, trip: active, autoNew
         <div className="grid g3">
           {trips.map((t) => {
             const mm = metrics(s, t); const d = tripDays(t); const c = mm.budget ? pct(mm.committed, mm.budget) : 0; const isA = active?.id === t.id;
+            const mine = isMine(t); const sh = s.shared?.[t.id]; const myRole = mine ? "owner" : sh?.my_role || "leitor"; const nMem = (sh?.members || []).length;
             return (
               <div key={t.id} className="card" style={{ borderColor: isA ? "var(--aqua)" : undefined, display: "flex", flexDirection: "column", gap: 12 }}>
                 <div className="row between" style={{ alignItems: "flex-start" }}>
                   <div style={{ minWidth: 0 }}>
-                    <div className="row" style={{ gap: 6 }}>{isA && <span className="badge b-green">Ativa</span>}<span className="badge">{TRIP_STATUS.find((x) => x[0] === t.status)?.[1]}</span>{t.demo && <span className="badge b-sand">Demonstração</span>}</div>
+                    <div className="row" style={{ gap: 6 }}>{isA && <span className="badge b-green">Ativa</span>}<span className="badge">{TRIP_STATUS.find((x) => x[0] === t.status)?.[1]}</span>{t.demo && <span className="badge b-sand">Demonstração</span>}{nMem > 1 && <span className="badge b-blue"><Users size={11} />{mine ? `Compartilhada com ${nMem - 1}` : `Você: ${ROLE_LABEL[myRole]}`}</span>}</div>
                     <h3 className="serif" style={{ fontSize: 19, margin: "10px 0 2px", fontWeight: 400 }}>{t.name}</h3>
                     <div className="muted" style={{ fontSize: 13 }}>{t.destination}</div>
                   </div>
@@ -853,10 +910,11 @@ function TripsPage({ s, update, toast, ask, setActive, go, trip: active, autoNew
                   {!arch && !isA && <button className="btn sm" onClick={() => { setActive(t.id); toast(`“${t.name}” agora é a viagem ativa`); }}>Tornar ativa</button>}
                   {!arch && isA && <button className="btn sm pri" onClick={() => go("dashboard")}>Abrir dashboard</button>}
                   <span style={{ flex: 1 }} />
-                  <button className="ib" title="Editar" aria-label="Editar" onClick={() => setEdit(t)}><Pencil size={15} /></button>
+                  {storeMode === "cloud" && !t.demo && <button className="ib" title={mine ? "Compartilhar com a família" : "Pessoas da viagem"} aria-label="Compartilhar" onClick={() => setShare(t)}><Users size={15} /></button>}
+                  {(mine || myRole === "editor") && <button className="ib" title="Editar" aria-label="Editar" onClick={() => setEdit(t)}><Pencil size={15} /></button>}
                   <button className="ib" title="Duplicar como modelo" aria-label="Duplicar" onClick={() => guard("trips", activeCount) && duplicate(t)}><Copy size={15} /></button>
-                  <button className="ib" title={arch ? "Restaurar" : "Arquivar"} aria-label={arch ? "Restaurar" : "Arquivar"} onClick={() => (!arch || guard("trips", activeCount)) && archive(t, !arch)}>{arch ? <ArchiveRestore size={15} /> : <Archive size={15} />}</button>
-                  <button className="ib dng" title="Excluir" aria-label="Excluir" onClick={() => del(t)}><Trash2 size={15} /></button>
+                  {mine && <button className="ib" title={arch ? "Restaurar" : "Arquivar"} aria-label={arch ? "Restaurar" : "Arquivar"} onClick={() => (!arch || guard("trips", activeCount)) && archive(t, !arch)}>{arch ? <ArchiveRestore size={15} /> : <Archive size={15} />}</button>}
+                  {mine && <button className="ib dng" title="Excluir" aria-label="Excluir" onClick={() => del(t)}><Trash2 size={15} /></button>}
                 </div>
               </div>
             );
@@ -864,6 +922,7 @@ function TripsPage({ s, update, toast, ask, setActive, go, trip: active, autoNew
         </div>
       )}
       {edit && <TripForm initial={edit} onSave={save} onClose={() => setEdit(null)} />}
+      {share && <ShareModal trip={share} s={s} me={me} rpc={rpc} reload={reload} toast={toast} guard={guard} ask={ask} onClose={() => setShare(null)} />}
     </div>
   );
 }
@@ -910,7 +969,7 @@ function ScheduleModal({ item, paidSoFar, openCount, onClose, onConfirm }) {
   );
 }
 
-function Planning({ s, trip, m, update, toast, ask, go }) {
+function Planning({ s, trip, m, update, toast, ask, go, canPlan = true }) {
   const [calc, setCalc] = useState(null);
   const [edit, setEdit] = useState(null); const [sch, setSch] = useState(null); const [cat, setCat] = useState("");
   const [sort, setSort] = useState({ k: "category", d: 1 });
@@ -958,7 +1017,7 @@ function Planning({ s, trip, m, update, toast, ask, go }) {
     list.map((i) => [i.description, i.category, brlPlain(i.estimated), brlPlain(i.contracted), brlPlain(m.paidByItem[i.id] || 0), num(i.contracted) != null && num(i.estimated) != null ? brlPlain(i.contracted - i.estimated) : "", fdate(i.dueDate), i.method, i.responsible, i.notes]));
 
   return (
-    <div className="grid">
+    <div className={`grid ${canPlan ? "" : "ro"}`}>
       <div className="strip" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))" }}>
         <div><div className="kl">Orçamento máximo</div><div className="kv">{brl(m.budget)}</div></div>
         <div><div className="kl">Previsto</div><div className="kv">{brl(m.estimated)}</div></div>
@@ -970,9 +1029,9 @@ function Planning({ s, trip, m, update, toast, ask, go }) {
       </div>
       <div className="row between">
         <div className="row"><Sel value={cat} onChange={setCat} opts={[["", "Todas as categorias"], ...CATS.map((c) => [c, c])]} style={{ width: 240 }} aria-label="Filtrar categoria" /></div>
-        <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="btn" onClick={() => setCalc("carro")}><Car size={15} />Custos de carro</button><button className="btn" onClick={() => setCalc("cruzeiro")}><Ship size={15} />Custos de cruzeiro</button><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo item</button></div>
+        <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="act btn" onClick={() => setCalc("carro")}><Car size={15} />Custos de carro</button><button className="act btn" onClick={() => setCalc("cruzeiro")}><Ship size={15} />Custos de cruzeiro</button><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo item</button></div>
       </div>
-      {m.items.length === 0 ? <div className="card"><Empty icon={Wallet} title="Monte seu planejamento" text="Adicione as despesas que você espera ter: passagens, hospedagem, alimentação, passeios. Quando uma proposta for selecionada, ela entra aqui automaticamente."><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Adicionar primeiro item</button></Empty></div> : (
+      {m.items.length === 0 ? <div className="card"><Empty icon={Wallet} title="Monte seu planejamento" text="Adicione as despesas que você espera ter: passagens, hospedagem, alimentação, passeios. Quando uma proposta for selecionada, ela entra aqui automaticamente."><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Adicionar primeiro item</button></Empty></div> : (
         <div className="tblwrap"><table className="tbl">
           <thead><tr>{th("description", "Descrição")}{th("category", "Categoria")}{th("estimated", "Previsto", 1)}{th("contracted", "Contratado", 1)}<th className="r">Pago</th><th className="r">Desvio</th><th>Pagamento</th><th></th></tr></thead>
           <tbody>{list.map((i) => {
@@ -985,9 +1044,9 @@ function Planning({ s, trip, m, update, toast, ask, go }) {
               <td className="r" style={{ color: dev > 0 ? "var(--red)" : dev < 0 ? "var(--green)" : undefined }}>{dev != null ? `${dev > 0 ? "+" : ""}${brl(dev)}` : "—"}</td>
               <td>{st}</td>
               <td className="r" style={{ whiteSpace: "nowrap" }}>
-                {con > 0 && paid < con - 0.01 && <button className="btn sm" onClick={() => setSch(i)}>Agendar</button>}
-                <button className="ib" aria-label="Editar" onClick={() => setEdit(i)}><Pencil size={15} /></button>
-                <button className="ib dng" aria-label="Excluir" onClick={() => del(i)}><Trash2 size={15} /></button>
+                {con > 0 && paid < con - 0.01 && <button className="act btn sm" onClick={() => setSch(i)}>Agendar</button>}
+                <button className="act ib" aria-label="Editar" onClick={() => setEdit(i)}><Pencil size={15} /></button>
+                <button className="act ib dng" aria-label="Excluir" onClick={() => del(i)}><Trash2 size={15} /></button>
               </td></tr>);
           })}</tbody>
           <tfoot><tr><td colSpan={2}>Total {cat ? `em ${cat}` : ""}</td><td className="r">{brl(sum(list, (i) => i.estimated))}</td><td className="r">{brl(sum(list, (i) => i.contracted))}</td><td className="r">{brl(list.reduce((a, i) => a + (m.paidByItem[i.id] || 0), 0))}</td><td colSpan={3}></td></tr></tfoot>
@@ -1359,7 +1418,7 @@ function Compare({ trip, m, ranked, weights, setWeights, onSelect, locked, onLoc
   );
 }
 
-function QuotesPage({ s, trip, m, update, toast, ask, go, plan, guard = () => true }) {
+function QuotesPage({ s, trip, m, update, toast, ask, go, plan, guard = () => true, canPlan = true, tripMine = true }) {
   const [tab, setTab] = useState("lista"); const [edit, setEdit] = useState(null); const [view, setView] = useState(null); const [sel, setSel] = useState(null);
   const [q, setQ] = useState(""); const [flt, setFlt] = useState("todas"); const [sort, setSort] = useState("score");
   const weights = { ...DEFAULT_WEIGHTS, ...(trip.weights || {}) };
@@ -1419,14 +1478,14 @@ function QuotesPage({ s, trip, m, update, toast, ask, go, plan, guard = () => tr
     list.map((x) => { const r = rmap[x.id]; return [x.agency, x.consultant, [x.phone, x.email].filter(Boolean).join(" / "), fdate(x.date), fdate(x.validUntil), x.code, brlPlain(x.total), x.people, r.perPerson ? brlPlain(r.perPerson) : "", brlPlain(x.entry), x.installments, brlPlain(x.installmentValue), brlPlain(x.interest), x.airline, x.connections, TRI_LABEL[x.baggage || ""], x.hotel, x.hotelStars, MEAL_LABEL[x.meal || ""], TRI_LABEL[x.transfers || ""], TRI_LABEL[x.insurance || ""], TRI_LABEL[x.toursInc || ""], CANCEL_LABEL[x.cancel || ""], wsum === 100 && r.score != null ? Math.round(r.score) : "", x.status === "contratada" ? "Contratada" : "Em aberto", missingFields(x).join(", ")]; }));
 
   return (
-    <div className="grid">
+    <div className={`grid ${canPlan ? "" : "ro"}`}>
       <div className="row between">
         <div className="tabs"><button className={tab === "lista" ? "on" : ""} onClick={() => setTab("lista")}>Cotações ({m.quotes.length})</button><button className={tab === "comp" ? "on" : ""} onClick={() => setTab("comp")}>Comparativo</button></div>
-        <button className="btn pri" onClick={() => guard("quotes", m.quotes.length) && setEdit({})}><Plus size={16} />Nova cotação</button>
+        <button className="act btn pri" onClick={() => guard("quotes", m.quotes.length) && setEdit({})}><Plus size={16} />Nova cotação</button>
       </div>
-      {m.booking && <div className="alert blue" style={{ background: "#EAF7FB" }}><Award size={16} color="#167D9A" /><span style={{ flex: 1 }}>Proposta selecionada: <b>{m.bookedQuote?.agency}</b>, {brl(m.booking.total)}{m.booking.contractNo ? `, contrato ${m.booking.contractNo}` : ""}. As demais cotações continuam disponíveis para consulta.</span><button className="btn sm" onClick={cancelSel}>Cancelar seleção</button></div>}
-      {tab === "comp" ? <Compare trip={trip} m={m} ranked={ranked} weights={weights} setWeights={setWeights} onSelect={setSel} locked={plan?.limits ? !plan.limits.can_edit_weights : false} onLocked={() => guard("weights")} /> : m.quotes.length === 0 ? (
-        <div className="card"><Empty icon={FileText} title="Nenhuma cotação ainda" text="Registre as propostas de cada agência com valores, parcelas, voo, hotel e serviços. Com duas ou mais, o comparativo de custo-benefício fica disponível."><button className="btn pri" onClick={() => guard("quotes", m.quotes.length) && setEdit({})}><Plus size={16} />Cadastrar cotação</button></Empty></div>
+      {m.booking && <div className="alert blue" style={{ background: "#EAF7FB" }}><Award size={16} color="#167D9A" /><span style={{ flex: 1 }}>Proposta selecionada: <b>{m.bookedQuote?.agency}</b>, {brl(m.booking.total)}{m.booking.contractNo ? `, contrato ${m.booking.contractNo}` : ""}. As demais cotações continuam disponíveis para consulta.</span><button className="act btn sm" onClick={cancelSel}>Cancelar seleção</button></div>}
+      {tab === "comp" ? <Compare trip={trip} m={m} ranked={ranked} weights={weights} setWeights={setWeights} onSelect={setSel} locked={!canPlan || (tripMine && plan?.limits ? !plan.limits.can_edit_weights : false)} onLocked={() => (canPlan ? guard("weights") : toast("Só o organizador e os editores alteram os pesos desta viagem.", "info"))} /> : m.quotes.length === 0 ? (
+        <div className="card"><Empty icon={FileText} title="Nenhuma cotação ainda" text="Registre as propostas de cada agência com valores, parcelas, voo, hotel e serviços. Com duas ou mais, o comparativo de custo-benefício fica disponível."><button className="act btn pri" onClick={() => guard("quotes", m.quotes.length) && setEdit({})}><Plus size={16} />Cadastrar cotação</button></Empty></div>
       ) : (<>
         <div className="row">
           <div className="searchbox" style={{ width: 260 }}><Search size={15} /><input className="inp" placeholder="Buscar empresa, hotel, cia" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Buscar cotações" /></div>
@@ -1438,18 +1497,18 @@ function QuotesPage({ s, trip, m, update, toast, ask, go, plan, guard = () => tr
           <thead><tr><th>Empresa</th><th className="r">Total</th><th className="r">Por pessoa</th><th className="r">Entrada</th><th>Parcelas</th><th>Validade</th><th className="r">Pontuação</th><th>Situação</th><th></th></tr></thead>
           <tbody>{list.map((x) => { const r = rmap[x.id]; const mf = missingFields(x); const expd = x.validUntil && x.validUntil < todayISO(); const isSel = m.booking?.quoteId === x.id;
             return <tr key={x.id}>
-              <td><div className="row" style={{ gap: 6, flexWrap: "nowrap" }}><button className="ib" style={{ width: 24, height: 24 }} onClick={() => fav(x)} aria-label={x.favorite ? "Remover dos favoritos" : "Favoritar"}><Heart size={14} color={x.favorite ? "#D9534F" : "#9DB3BB"} fill={x.favorite ? "#D9534F" : "none"} /></button><div><b style={{ fontWeight: 600 }}>{x.agency}</b><div className="muted" style={{ fontSize: 12 }}>{[x.hotel, x.airline].filter(Boolean).join(", ") || "sem detalhes de serviços"}</div></div></div></td>
+              <td><div className="row" style={{ gap: 6, flexWrap: "nowrap" }}><button className="act ib" style={{ width: 24, height: 24 }} onClick={() => fav(x)} aria-label={x.favorite ? "Remover dos favoritos" : "Favoritar"}><Heart size={14} color={x.favorite ? "#D9534F" : "#9DB3BB"} fill={x.favorite ? "#D9534F" : "none"} /></button><div><b style={{ fontWeight: 600 }}>{x.agency}</b><div className="muted" style={{ fontSize: 12 }}>{[x.hotel, x.airline].filter(Boolean).join(", ") || "sem detalhes de serviços"}</div></div></div></td>
               <td className="r"><b>{num(x.total) ? brl(x.total) : "—"}</b></td><td className="r">{r.perPerson ? brl(r.perPerson) : "—"}</td><td className="r">{num(x.entry) != null ? brl(x.entry) : "—"}</td>
               <td>{num(x.installments) ? `${x.installments}x${num(x.installmentValue) ? ` ${brl(x.installmentValue)}` : ""}` : "—"}</td>
               <td style={{ color: expd ? "var(--red)" : undefined }}>{fdate(x.validUntil)}</td>
               <td className="r">{wsum === 100 && r.score != null ? <span><b>{Math.round(r.score)}</b><span className="muted"> ({r.pos}º)</span></span> : "—"}</td>
               <td>{isSel ? <span className="badge b-green">Contratada</span> : expd ? <span className="badge b-red">Expirada</span> : mf.length ? <span className="badge b-orange" title={`Faltam: ${mf.join(", ")}`}>Incompleta</span> : <span className="badge b-blue">Completa</span>}</td>
               <td className="r" style={{ whiteSpace: "nowrap" }}>
-                {!isSel && num(x.total) > 0 && <button className="btn sm" onClick={() => setSel(x)}>Selecionar</button>}
+                {!isSel && num(x.total) > 0 && <button className="act btn sm" onClick={() => setSel(x)}>Selecionar</button>}
                 <button className="ib" aria-label="Ver detalhes" onClick={() => setView(x)}><Eye size={15} /></button>
-                <button className="ib" aria-label="Editar" onClick={() => setEdit(x)}><Pencil size={15} /></button>
-                <button className="ib" aria-label="Duplicar" onClick={() => guard("quotes", m.quotes.length) && dup(x)}><Copy size={15} /></button>
-                <button className="ib dng" aria-label="Excluir" onClick={() => del(x)}><Trash2 size={15} /></button>
+                <button className="act ib" aria-label="Editar" onClick={() => setEdit(x)}><Pencil size={15} /></button>
+                <button className="act ib" aria-label="Duplicar" onClick={() => guard("quotes", m.quotes.length) && dup(x)}><Copy size={15} /></button>
+                <button className="act ib dng" aria-label="Excluir" onClick={() => del(x)}><Trash2 size={15} /></button>
               </td></tr>; })}
             {!list.length && <tr><td colSpan={9} className="muted" style={{ textAlign: "center", padding: 28 }}>Nenhuma cotação com esses filtros.</td></tr>}
           </tbody></table></div>
@@ -1484,7 +1543,7 @@ function PaymentForm({ initial, items, onSave, onClose }) {
   );
 }
 
-function PaymentsPage({ s, trip, m, update, toast, ask }) {
+function PaymentsPage({ s, trip, m, update, toast, ask, canPlan = true }) {
   const [view, setView] = useState("lista"); const [st, setSt] = useState("abertos"); const [cat, setCat] = useState(""); const [edit, setEdit] = useState(null); const [payNow, setPayNow] = useState(null);
   const [month, setMonth] = useState(() => todayISO().slice(0, 7));
   let list = m.pays.slice().sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || "") || (a.installmentNo || 0) - (b.installmentNo || 0));
@@ -1505,7 +1564,7 @@ function PaymentsPage({ s, trip, m, update, toast, ask }) {
   const exp = () => downloadCSV(`pagamentos-${slug(trip.name)}.csv`, ["Descrição", "Categoria", "Fornecedor", "Valor", "Vencimento", "Data do pagamento", "Forma", "Status", "Parcela", "Total de parcelas", "Origem"], list.map((p) => [p.description, p.category, p.supplier, brlPlain(p.amount), fdate(p.dueDate), fdate(p.paidDate), p.method, PAY_LABEL[effStatus(p)], p.installmentNo, p.installmentTotal, p.bookingId ? "Proposta selecionada" : p.itemId ? "Item do planejamento" : "Manual"]));
   const monthly = useMemo(() => { const g = {}; m.activePays.forEach((p) => { const k = (p.dueDate || "").slice(0, 7); if (!k) return; g[k] = g[k] || { total: 0, pago: 0, n: 0 }; g[k].total = r2(g[k].total + p.amount); g[k].n++; if (p.status === "pago") g[k].pago = r2(g[k].pago + p.amount); }); return Object.keys(g).sort().map((k) => ({ k, ...g[k], aberto: r2(g[k].total - g[k].pago) })); }, [m]);
   return (
-    <div className="grid">
+    <div className={`grid ${canPlan ? "" : "ro"}`}>
       <div className="strip" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))" }}>
         <div><div className="kl">Total contratado</div><div className="kv">{brl(m.contracted)}</div></div>
         <div><div className="kl">Parcelas pagas</div><div className="kv" style={{ color: "var(--green)" }}>{brl(m.paidPays)}</div></div>
@@ -1515,9 +1574,9 @@ function PaymentsPage({ s, trip, m, update, toast, ask }) {
       </div>
       <div className="row between">
         <div className="tabs"><button className={view === "lista" ? "on" : ""} onClick={() => setView("lista")}>Lista</button><button className={view === "cal" ? "on" : ""} onClick={() => setView("cal")}>Calendário</button><button className={view === "mes" ? "on" : ""} onClick={() => setView("mes")}>Resumo mensal</button></div>
-        <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo pagamento</button></div>
+        <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo pagamento</button></div>
       </div>
-      {m.pays.length === 0 ? <div className="card"><Empty icon={CalendarClock} title="Nenhum pagamento agendado" text="Os pagamentos são gerados ao selecionar uma proposta ou ao agendar um item contratado no Planejamento. Você também pode lançar um manualmente."><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Lançar pagamento</button></Empty></div> : view === "lista" ? (<>
+      {m.pays.length === 0 ? <div className="card"><Empty icon={CalendarClock} title="Nenhum pagamento agendado" text="Os pagamentos são gerados ao selecionar uma proposta ou ao agendar um item contratado no Planejamento. Você também pode lançar um manualmente."><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Lançar pagamento</button></Empty></div> : view === "lista" ? (<>
         <div className="row"><Sel value={st} onChange={setSt} style={{ width: 190 }} aria-label="Status" opts={[["abertos", "Em aberto"], ["todos", "Todos"], ["previsto", "Previstos"], ["pendente", "Pendentes"], ["atrasado", "Atrasados"], ["pago", "Pagos"], ["cancelado", "Cancelados"]]} /><Sel value={cat} onChange={setCat} style={{ width: 230 }} aria-label="Categoria" opts={[["", "Todas as categorias"], ...CATS.map((c) => [c, c])]} /></div>
         <div className="tblwrap"><table className="tbl"><thead><tr><th>Vencimento</th><th>Descrição</th><th>Categoria</th><th>Forma</th><th className="r">Valor</th><th>Status</th><th></th></tr></thead>
           <tbody>{list.map((p) => { const es = effStatus(p); const dd = p.dueDate ? diffDays(today, p.dueDate) : null; return <tr key={p.id} style={{ opacity: p.status === "cancelado" ? 0.55 : 1 }}>
@@ -1525,11 +1584,11 @@ function PaymentsPage({ s, trip, m, update, toast, ask }) {
             <td><b style={{ fontWeight: 600 }}>{p.description}</b>{p.supplier && <div className="muted" style={{ fontSize: 12 }}>{p.supplier}</div>}</td><td>{p.category}</td><td>{p.method}</td>
             <td className="r"><b>{brl(p.amount)}</b></td><td><PayBadge p={p} /></td>
             <td className="r" style={{ whiteSpace: "nowrap" }}>
-              {!["pago", "cancelado"].includes(p.status) && <button className="btn sm pri" onClick={() => setPayNow(p)}><Check size={13} />Pagar</button>}
-              {p.status === "pago" && <button className="btn sm ghost" onClick={() => undo(p)}>Desfazer</button>}
-              <button className="ib" aria-label="Editar" onClick={() => setEdit(p)}><Pencil size={15} /></button>
-              {!["pago", "cancelado"].includes(p.status) && <button className="ib" title="Cancelar" aria-label="Cancelar pagamento" onClick={() => cancel(p)}><X size={15} /></button>}
-              <button className="ib dng" aria-label="Excluir" onClick={() => del(p)}><Trash2 size={15} /></button>
+              {!["pago", "cancelado"].includes(p.status) && <button className="act btn sm pri" onClick={() => setPayNow(p)}><Check size={13} />Pagar</button>}
+              {p.status === "pago" && <button className="act btn sm ghost" onClick={() => undo(p)}>Desfazer</button>}
+              <button className="act ib" aria-label="Editar" onClick={() => setEdit(p)}><Pencil size={15} /></button>
+              {!["pago", "cancelado"].includes(p.status) && <button className="act ib" title="Cancelar" aria-label="Cancelar pagamento" onClick={() => cancel(p)}><X size={15} /></button>}
+              <button className="act ib dng" aria-label="Excluir" onClick={() => del(p)}><Trash2 size={15} /></button>
             </td></tr>; })}
             {!list.length && <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: 28 }}>Nenhum pagamento com esses filtros.</td></tr>}
           </tbody>{list.length > 0 && <tfoot><tr><td colSpan={4}>Total filtrado (sem cancelados)</td><td className="r">{brl(sum(list.filter((p) => p.status !== "cancelado"), (p) => p.amount))}</td><td colSpan={2}></td></tr></tfoot>}</table></div>
@@ -1670,7 +1729,7 @@ function DocForm({ initial, trip, onSave, onClose }) {
   );
 }
 
-function DocsPanel({ s, trip, update, toast, ask }) {
+function DocsPanel({ s, trip, update, toast, ask, canPlan = true }) {
   const [edit, setEdit] = useState(null);
   const docs = (s.docs || []).filter((d) => d.tripId === trip.id).sort((a, b) => (a.status === b.status ? String(a.dueDate || "9").localeCompare(String(b.dueDate || "9")) : a.status === "pendente" ? -1 : 1));
   const save = (f) => { if (f.id) update((x) => ({ ...x, docs: x.docs.map((d) => (d.id === f.id ? { ...d, ...f } : d)) })); else update((x) => withLog({ ...x, docs: [...(x.docs || []), { ...f, id: uid(), tripId: trip.id }] }, trip.id, `Documento cadastrado: ${f.title}`)); toast(f.id ? "Documento atualizado" : "Documento cadastrado"); setEdit(null); };
@@ -1678,15 +1737,15 @@ function DocsPanel({ s, trip, update, toast, ask }) {
   const del = (d) => ask({ title: "Excluir documento", danger: true, cta: "Excluir", message: `Excluir “${d.title}”? O arquivo no link não é afetado.`, onConfirm: () => { update((x) => ({ ...x, docs: x.docs.filter((y) => y.id !== d.id) })); toast("Documento excluído"); } });
   const pend = docs.filter((d) => d.status !== "ok").length;
   return (
-    <div className="grid">
-      <div className="row between"><span className="muted" style={{ fontSize: 13 }}>{docs.length ? `${pend} pendente(s) de ${docs.length}` : "Documentos, vouchers e reservas da viagem"}</span><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo documento</button></div>
-      {!docs.length ? <div className="card"><Empty icon={Paperclip} title="Nenhum documento cadastrado" text="Registre documentos de identidade, vouchers, bilhetes, seguro e reservas. Pendências aparecem nos alertas do dashboard."><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Cadastrar documento</button></Empty></div> : (
+    <div className={`grid ${canPlan ? "" : "ro"}`}>
+      <div className="row between"><span className="muted" style={{ fontSize: 13 }}>{docs.length ? `${pend} pendente(s) de ${docs.length}` : "Documentos, vouchers e reservas da viagem"}</span><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo documento</button></div>
+      {!docs.length ? <div className="card"><Empty icon={Paperclip} title="Nenhum documento cadastrado" text="Registre documentos de identidade, vouchers, bilhetes, seguro e reservas. Pendências aparecem nos alertas do dashboard."><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Cadastrar documento</button></Empty></div> : (
         <div className="tblwrap"><table className="tbl"><thead><tr><th>Documento</th><th>Tipo</th><th>De quem</th><th>Prazo</th><th>Situação</th><th></th></tr></thead>
           <tbody>{docs.map((d) => <tr key={d.id}>
             <td><b style={{ fontWeight: 600 }}>{d.title}</b>{d.notes && <div className="muted" style={{ fontSize: 12 }}>{d.notes}</div>}</td><td>{d.type}</td><td>{d.person || "—"}</td>
             <td style={{ color: d.status !== "ok" && d.dueDate && d.dueDate < todayISO() ? "var(--red)" : undefined }}>{fdate(d.dueDate)}</td>
-            <td><button className={`badge ${d.status === "ok" ? "b-green" : "b-orange"}`} style={{ border: 0, cursor: "pointer" }} onClick={() => toggle(d)} title="Alternar situação">{d.status === "ok" ? "Confirmado" : "Pendente"}</button></td>
-            <td className="r" style={{ whiteSpace: "nowrap" }}>{d.link && <a className="ib" href={d.link} target="_blank" rel="noreferrer" aria-label="Abrir arquivo"><ExternalLink size={15} /></a>}<button className="ib" aria-label="Editar" onClick={() => setEdit(d)}><Pencil size={15} /></button><button className="ib dng" aria-label="Excluir" onClick={() => del(d)}><Trash2 size={15} /></button></td>
+            <td><button className={`badge ${d.status === "ok" ? "b-green" : "b-orange"}`} style={{ border: 0, cursor: "pointer" }} onClick={() => canPlan && toggle(d)} title="Alternar situação">{d.status === "ok" ? "Confirmado" : "Pendente"}</button></td>
+            <td className="r" style={{ whiteSpace: "nowrap" }}>{d.link && <a className="act ib" href={d.link} target="_blank" rel="noreferrer" aria-label="Abrir arquivo"><ExternalLink size={15} /></a>}<button className="act ib" aria-label="Editar" onClick={() => setEdit(d)}><Pencil size={15} /></button><button className="act ib dng" aria-label="Excluir" onClick={() => del(d)}><Trash2 size={15} /></button></td>
           </tr>)}</tbody></table></div>)}
       <p className="note"><Info size={14} />Nesta versão os anexos são links. O envio de arquivos exige armazenamento privado com permissão por usuário, previsto para a versão com Supabase.</p>
       {edit && <DocForm initial={edit} trip={trip} onSave={save} onClose={() => setEdit(null)} />}
@@ -1694,7 +1753,8 @@ function DocsPanel({ s, trip, update, toast, ask }) {
   );
 }
 
-function ItineraryPage({ s, trip, update, toast, ask }) {
+function ItineraryPage({ s, trip, update, toast, ask, canPlan = true, canAct = true, me = "local", sharedTrip, myTraveler }) {
+  const itCan = (i) => canPlan || (canAct && (!i._by || i._by === me));
   const programs = s.programs || [];
   const [tab, setTab] = useState("roteiro");
   const [edit, setEdit] = useState(null); const [flt, setFlt] = useState("todas"); const [ft, setFt] = useState(""); const [spend, setSpend] = useState(null);
@@ -1709,25 +1769,25 @@ function ItineraryPage({ s, trip, update, toast, ask }) {
   const toggle = (i) => update((x) => ({ ...x, itinerary: x.itinerary.map((y) => (y.id === i.id ? { ...y, status: y.status === "realizada" ? "planejada" : "realizada" } : y)) }));
   const saveSpend = (f) => {
     if (s.expenses.some((e) => e.itineraryId === f.itineraryId)) { toast("Esta atividade já tem um gasto lançado", "err"); setSpend(null); return; }
-    update((x) => withLog({ ...x, expenses: [{ ...f, id: uid(), tripId: trip.id, createdAt: new Date().toISOString() }, ...x.expenses], itinerary: x.itinerary.map((y) => (y.id === f.itineraryId ? { ...y, status: "realizada", real: f.amount } : y)) }, trip.id, `Despesa do roteiro: ${f.description} (${brl(f.amount)})`));
+    update((x) => withLog({ ...x, expenses: [{ ...f, id: uid(), tripId: trip.id, createdAt: new Date().toISOString() }, ...x.expenses], itinerary: x.itinerary.map((y) => (y.id === f.itineraryId && itCan(y) ? { ...y, status: "realizada", real: f.amount } : y)) }, trip.id, `Despesa do roteiro: ${f.description} (${brl(f.amount)})`));
     toast("Gasto registrado em Despesas e atividade marcada como realizada"); setSpend(null);
   };
   const all = s.itinerary.filter((i) => i.tripId === trip.id && i.status !== "cancelada");
   const plannedSav = sum(all.filter((i) => i.benefit && !spentIds.has(i.id)), (i) => num(i.benefit.full) - (num(i.estimated) || 0));
   const exp = () => downloadCSV(`roteiro-${slug(trip.name)}.csv`, ["Data", "Horário", "Tipo", "Cidade", "Atividade", "Local", "Link", "Estimado", "Realizado", "Benefício", "Economia prevista", "Participantes", "Reserva", "Situação", "Observações"], list.slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((i) => { const ro = ruleOf(programs, i.benefit); return [fdate(i.date), i.time, ITIN_LABEL[i.type || "outro"], i.city, i.activity, i.place, i.link, brlPlain(i.estimated), brlPlain(i.real), ro ? `${ro.p.name}${ro.r ? `: ${ro.r.label}` : ""}` : "", i.benefit ? brlPlain(num(i.benefit.full) - (num(i.estimated) || 0)) : "", i.participants, i.needsReservation ? (i.reservationStatus === "confirmada" ? "Confirmada" : "Pendente") : "Não precisa", i.status, i.notes]; }));
   return (
-    <div className="grid">
+    <div className={`grid ${canAct ? "" : "ro"}`}>
       <div className="tabs" style={{ justifySelf: "start" }}><button className={tab === "roteiro" ? "on" : ""} onClick={() => setTab("roteiro")}>Roteiro</button><button className={tab === "docs" ? "on" : ""} onClick={() => setTab("docs")}>Documentos e reservas</button></div>
-      {tab === "docs" ? <DocsPanel s={s} trip={trip} update={update} toast={toast} ask={ask} /> : <>
+      {tab === "docs" ? <DocsPanel s={s} trip={trip} update={update} toast={toast} ask={ask} canPlan={canPlan} /> : <>
         <div className="row between">
           <div className="row">
             <Sel value={flt} onChange={setFlt} style={{ width: 150 }} aria-label="Situação" opts={[["todas", "Todas"], ["planejada", "Planejadas"], ["realizada", "Realizadas"], ["cancelada", "Canceladas"]]} />
             <Sel value={ft} onChange={setFt} style={{ width: 170 }} aria-label="Tipo" opts={[["", "Todos os tipos"], ...ITIN_TYPES]} />
             <span className="muted hide-m" style={{ fontSize: 13 }}>Estimado: <b style={{ color: "var(--ink)" }}>{brl(sum(all, (i) => i.estimated))}</b>{plannedSav > 0 && <> , economia prevista com benefícios: <b style={{ color: "var(--green)" }}>{brl(plannedSav)}</b></>}</span>
           </div>
-          <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Nova atividade</button></div>
+          <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Nova atividade</button></div>
         </div>
-        {!dates.length ? <div className="card"><Empty icon={MapPin} title="Roteiro em branco" text="Inclua restaurantes, praias, passeios e deslocamentos por dia. Se usar um clube como o Prime Gourmet, escolha o benefício na atividade e a economia é calculada."><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Adicionar atividade</button></Empty></div> :
+        {!dates.length ? <div className="card"><Empty icon={MapPin} title="Roteiro em branco" text="Inclua restaurantes, praias, passeios e deslocamentos por dia. Se usar um clube como o Prime Gourmet, escolha o benefício na atividade e a economia é calculada."><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Adicionar atividade</button></Empty></div> :
           dates.map((d) => {
             const n = trip.startDate ? diffDays(trip.startDate, d) + 1 : null;
             const wd = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"][new Date(dayNum(d) * 86400000).getUTCDay()];
@@ -1744,11 +1804,11 @@ function ItineraryPage({ s, trip, update, toast, ask }) {
                       <div className="muted" style={{ fontSize: 12.5 }}>{ITIN_LABEL[i.type || "outro"]}{[i.place, i.city].filter(Boolean).length ? `, ${[i.place, i.city].filter(Boolean).join(", ")}` : ""}{num(i.estimated) ? `. Estimado ${brl(i.estimated)}` : num(i.estimated) === 0 ? ". Gratuita" : ""}{num(i.real) ? `, realizado ${brl(i.real)}` : ""}{i.notes ? `. ${i.notes}` : ""}</div>
                     </div>
                     <div className="row" style={{ gap: 2, flexWrap: "nowrap" }}>
-                      {i.status !== "cancelada" && (spent ? <span className="badge b-green hide-m">Gasto lançado</span> : <button className="btn sm" onClick={() => setSpend({ description: i.activity, category: ITIN_CAT[i.type || "outro"], amount: num(i.real) || num(i.estimated) || "", date: i.date, place: [i.place, i.city].filter(Boolean).join(", "), benefit: i.benefit, itineraryId: i.id, status: "paga", method: "Pix", shared: false })}><Receipt size={13} />Registrar gasto</button>)}
-                      {i.link && <a className="ib" href={i.link} target="_blank" rel="noreferrer" aria-label="Abrir link"><ExternalLink size={15} /></a>}
-                      {i.status !== "cancelada" && <button className="ib" title={i.status === "realizada" ? "Marcar como planejada" : "Marcar como realizada"} aria-label="Alternar realizada" onClick={() => toggle(i)}><CheckCircle2 size={16} color={i.status === "realizada" ? "#21865B" : undefined} /></button>}
-                      <button className="ib" aria-label="Editar" onClick={() => setEdit(i)}><Pencil size={15} /></button>
-                      <button className="ib dng" aria-label="Excluir" onClick={() => del(i)}><Trash2 size={15} /></button>
+                      {i.status !== "cancelada" && (spent ? <span className="badge b-green hide-m">Gasto lançado</span> : <button className="act btn sm" onClick={() => setSpend({ description: i.activity, category: ITIN_CAT[i.type || "outro"], amount: num(i.real) || num(i.estimated) || "", date: i.date, place: [i.place, i.city].filter(Boolean).join(", "), benefit: i.benefit, itineraryId: i.id, status: "paga", method: "Pix", shared: false, person: myTraveler || "" })}><Receipt size={13} />Registrar gasto</button>)}
+                      {i.link && <a className="act ib" href={i.link} target="_blank" rel="noreferrer" aria-label="Abrir link"><ExternalLink size={15} /></a>}
+                      {i.status !== "cancelada" && itCan(i) && <button className="act ib" title={i.status === "realizada" ? "Marcar como planejada" : "Marcar como realizada"} aria-label="Alternar realizada" onClick={() => toggle(i)}><CheckCircle2 size={16} color={i.status === "realizada" ? "#21865B" : undefined} /></button>}
+                      {itCan(i) && <><button className="act ib" aria-label="Editar" onClick={() => setEdit(i)}><Pencil size={15} /></button>
+                      <button className="act ib dng" aria-label="Excluir" onClick={() => del(i)}><Trash2 size={15} /></button></>}
                     </div>
                   </div>);
               })}</div>
@@ -1756,7 +1816,7 @@ function ItineraryPage({ s, trip, update, toast, ask }) {
           })}
       </>}
       {edit && <ItinForm initial={edit} trip={trip} programs={programs} onSave={save} onClose={() => setEdit(null)} />}
-      {spend && <ExpenseForm initial={spend} trip={trip} programs={programs} title="Registrar gasto da atividade" onSave={saveSpend} onClose={() => setSpend(null)} />}
+      {spend && <ExpenseForm sharedTrip={sharedTrip} initial={spend} trip={trip} programs={programs} title="Registrar gasto da atividade" onSave={saveSpend} onClose={() => setSpend(null)} />}
     </div>
   );
 }
@@ -1766,26 +1826,29 @@ const QUICK = ["Alimentação", "Transporte local", "Passeios e excursões", "Co
 const quickFor = (t) => { const tr = t.transport || []; const extra = []; if (tr.some((x) => x.startsWith("Carro"))) extra.push("Combustível", "Pedágios"); if (tr.includes("Cruzeiro")) extra.push("Pacotes a bordo", "Excursões em terra"); return [...QUICK.slice(0, 4), ...extra, ...QUICK.slice(4)]; };
 const QUICK_L = { "Combustível": "Combustível", "Pedágios": "Pedágio", "Pacotes a bordo": "A bordo", "Excursões em terra": "Excursões", "Alimentação": "Alimentação", "Transporte local": "Transporte", "Passeios e excursões": "Passeios", "Compras e lembranças": "Compras", "Ingressos": "Ingressos", "Outras despesas": "Outros" };
 
-function ExpenseForm({ initial, trip, programs = [], title, onSave, onClose }) {
+function ExpenseForm({ initial, trip, programs = [], title, onSave, onClose, sharedTrip }) {
   const people = peopleOf(trip);
   const [f, setF] = useState(() => {
     const base = { description: "", category: "Alimentação", amount: "", date: todayISO(), method: "Pix", person: "", place: "", notes: "", status: "paga", shared: false, benefit: null, splitMode: "igual", ...initial };
+    base.privateTouched = initial?.private != null;
+    if (initial?.private == null) base.private = PRIVATE_CATS.includes(base.category);
     const sp = initial?.splits || [];
     return { ...base, splitPeople: sp.length ? sp.map((x) => x.person) : people, splitValues: Object.fromEntries(sp.map((x) => [x.person, x.amount])) };
   });
   const [e, setE] = useState({}); const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const amt = num(f.amount) || 0;
-  const splits = !f.shared ? [] : f.splitMode === "igual" ? splitEqual(amt, f.splitPeople.filter((p) => people.includes(p) || f.splitPeople.includes(p))) : people.map((p) => ({ person: p, amount: r2(num(f.splitValues[p]) || 0) })).filter((x) => x.amount > 0);
+  const splits = !f.shared || f.private ? [] : f.splitMode === "igual" ? splitEqual(amt, f.splitPeople.filter((p) => people.includes(p) || f.splitPeople.includes(p))) : people.map((p) => ({ person: p, amount: r2(num(f.splitValues[p]) || 0) })).filter((x) => x.amount > 0);
   const splitSum = sum(splits, (x) => x.amount);
   const submit = () => {
     const x = {};
     if (!(amt > 0)) x.amount = "Informe um valor maior que zero.";
     if (!f.date) x.date = "Informe a data.";
-    if (f.shared && !splits.length) x.split = "Escolha quem participa da divisão.";
-    else if (f.shared && Math.abs(splitSum - amt) > 0.009) x.split = `A divisão soma ${brl(splitSum)}, mas a despesa é de ${brl(amt)}.`;
+    if (f.shared && !f.private && !splits.length) x.split = "Escolha quem participa da divisão.";
+    else if (f.shared && !f.private && Math.abs(splitSum - amt) > 0.009) x.split = `A divisão soma ${brl(splitSum)}, mas a despesa é de ${brl(amt)}.`;
     if (f.benefit?.programId && num(f.benefit.full) > 0 && num(f.benefit.full) < amt) x.amount = "O valor pago é maior que o valor sem benefício.";
     setE(x); if (Object.keys(x).length) return;
-    const { splitPeople, splitValues, ...rest } = f;
+    const { splitPeople, splitValues, privateTouched, ...rest } = f;
+    if (rest.private) rest.shared = false;
     onSave({ ...rest, description: f.description.trim() || f.category, amount: r2(amt), splits, benefit: f.benefit?.programId && num(f.benefit.full) > 0 ? f.benefit : null });
   };
   return (
@@ -1795,13 +1858,17 @@ function ExpenseForm({ initial, trip, programs = [], title, onSave, onClose }) {
         <BenefitPicker date={f.date} programs={programs} value={f.benefit} onChange={(b) => set("benefit", b)} onPaid={(v) => set("amount", v)} paid={f.amount} paidLabel="valor" />
         <Fld label={f.benefit ? "Valor pago (com benefício)" : "Valor"} err={e.amount}><Money value={f.amount} onChange={(v) => set("amount", v)} /></Fld>
         <Fld label="Data" err={e.date}><Inp type="date" value={f.date} onChange={(v) => set("date", v)} /></Fld>
-        <Fld label="Categoria"><CatSel value={f.category} onChange={(v) => set("category", v)} /></Fld>
+        <Fld label="Categoria"><CatSel value={f.category} onChange={(v) => setF((p) => ({ ...p, category: v, ...(p.privateTouched ? {} : { private: PRIVATE_CATS.includes(v), shared: PRIVATE_CATS.includes(v) ? false : p.shared }) }))} /></Fld>
         <Fld label="Forma de pagamento"><Sel value={f.method} onChange={(v) => set("method", v)} opts={METHODS} /></Fld>
         <Fld label="Situação" hint="Compra no crédito: marque como Realizada. A fatura não é lançada de novo."><Sel value={f.status} onChange={(v) => set("status", v)} opts={EXP_STATUS} /></Fld>
         <Fld label="Quem pagou"><Sel value={f.person} onChange={(v) => set("person", v)} opts={[["", "Não informado"], ...people.map((p) => [p, p])]} /></Fld>
         <Fld label="Local ou estabelecimento" full><Inp value={f.place} onChange={(v) => set("place", v)} /></Fld>
-        <div className="full"><Toggle checked={f.shared} onChange={(v) => set("shared", v)} label="Despesa compartilhada entre os viajantes" /></div>
-        {f.shared && (
+        {sharedTrip && <div className="full benefit" style={{ background: f.private ? "#FFF9EF" : "#FAFCFC", borderColor: f.private ? "#F1E2C6" : "var(--line)" }}>
+          <Toggle checked={!!f.private} onChange={(v) => setF((p) => ({ ...p, private: v, privateTouched: true, shared: v ? false : p.shared }))} label="Despesa privada: só você vê os detalhes" />
+          <div className="hint" style={{ marginTop: 4, fontSize: 12, color: "var(--muted)" }}>{f.private ? "Os outros membros veem apenas o valor somado em “Gastos pessoais”, sem descrição, local nem autor. Não entra no acerto de contas." : "Todos os membros da viagem veem esta despesa."}</div>
+        </div>}
+        {!f.private && <div className="full"><Toggle checked={f.shared} onChange={(v) => set("shared", v)} label="Despesa compartilhada entre os viajantes" /></div>}
+        {f.shared && !f.private && (
           <div className="benefit" style={{ background: "#F3F9FB", borderColor: "#D6EAF1" }}>
             <div className="row between" style={{ marginBottom: 10 }}><b style={{ fontSize: 13 }}>Como dividir</b><div className="tabs"><button className={f.splitMode === "igual" ? "on" : ""} onClick={() => set("splitMode", "igual")}>Partes iguais</button><button className={f.splitMode === "valor" ? "on" : ""} onClick={() => set("splitMode", "valor")}>Valores por pessoa</button></div></div>
             <div className="grid" style={{ gap: 8 }}>{people.map((p) => {
@@ -1840,14 +1907,15 @@ function SettlementCard({ exps, people, compact }) {
   );
 }
 
-function ExpensesPage({ s, trip, m, update, toast, ask }) {
+function ExpensesPage({ s, trip, m, update, toast, ask, canPlan = true, canAct = true, me = "local", sharedTrip, myTraveler }) {
+  const rowCan = (e) => { const mine = !e._by || e._by === me; return canPlan ? !e.private || mine : canAct && mine; };
   const people = peopleOf(trip); const programs = s.programs || [];
-  const [qa, setQa] = useState({ cat: "Alimentação", amount: "", desc: "", method: "Pix", person: "" });
+  const [qa, setQa] = useState({ cat: "Alimentação", amount: "", desc: "", method: "Pix", person: myTraveler || "" });
   const [edit, setEdit] = useState(null); const [fc, setFc] = useState(""); const [fs, setFs] = useState(""); const [fq, setFq] = useState("");
   const amtRef = useRef(null);
   const add = () => {
     if (!(num(qa.amount) > 0)) { toast("Informe o valor da despesa", "err"); amtRef.current?.focus(); return; }
-    const e = { id: uid(), tripId: trip.id, description: qa.desc.trim() || qa.cat, category: qa.cat, amount: r2(qa.amount), date: todayISO(), method: qa.method, person: qa.person, place: "", notes: "", status: qa.method === "Cartão de crédito" ? "realizada" : "paga", shared: false, splits: [], benefit: null, createdAt: new Date().toISOString() };
+    const e = { id: uid(), tripId: trip.id, description: qa.desc.trim() || qa.cat, category: qa.cat, amount: r2(qa.amount), date: todayISO(), method: qa.method, person: qa.person, place: "", notes: "", status: qa.method === "Cartão de crédito" ? "realizada" : "paga", shared: false, splits: [], benefit: null, private: PRIVATE_CATS.includes(qa.cat), createdAt: new Date().toISOString() };
     update((x) => withLog({ ...x, expenses: [e, ...x.expenses] }, trip.id, `Despesa: ${e.description} (${brl(e.amount)})`));
     setQa((p) => ({ ...p, amount: "", desc: "" }));
     toast(`${brl(e.amount)} em ${QUICK_L[e.category] || e.category}`, "ok", { label: "Adicionar detalhes", fn: () => setEdit(e) });
@@ -1862,9 +1930,9 @@ function ExpensesPage({ s, trip, m, update, toast, ask }) {
   const exp = () => downloadCSV(`despesas-${slug(trip.name)}.csv`, ["Data", "Descrição", "Categoria", "Valor", "Forma", "Situação", "Quem pagou", "Compartilhada", "Divisão", "Benefício", "Valor sem benefício", "Economia", "Local", "Observação"], list.map((e) => { const ro = ruleOf(programs, e.benefit); return [fdate(e.date), e.description, e.category, brlPlain(e.amount), e.method, EXP_LABEL[e.status], e.person, e.shared ? "Sim" : "Não", (e.splits || []).map((x) => `${x.person}: ${brlPlain(x.amount)}`).join(" | "), ro ? ro.p.name : "", e.benefit ? brlPlain(e.benefit.full) : "", e.benefit ? brlPlain(num(e.benefit.full) - e.amount) : "", e.place, e.notes]; }));
   const stBadge = { paga: "b-green", realizada: "b-blue", pendente: "b-orange", prevista: "", reembolsada: "b-sand" };
   return (
-    <div className="grid" style={{ gridTemplateColumns: "minmax(0,1fr)" }}>
+    <div className={`grid ${canAct ? "" : "ro"}`} style={{ gridTemplateColumns: "minmax(0,1fr)" }}>
       <div className="grid g2" style={{ alignItems: "start" }}>
-        <div className="qa">
+        <div className="act qa">
           <div className="row between" style={{ marginBottom: 12 }}><b style={{ fontSize: 15 }}>Lançamento rápido</b><span style={{ fontSize: 12.5, color: "#A7C5CF" }}>Hoje: {brl(todayTotal)}</span></div>
           <div className="row" style={{ gap: 6, marginBottom: 12 }}>{quickFor(trip).map((c) => <button key={c} className={`chip ${qa.cat === c ? "on" : ""}`} onClick={() => setQa({ ...qa, cat: c })}>{QUICK_L[c]}</button>)}</div>
           <Money className="amount" value={qa.amount} onChange={(v) => setQa({ ...qa, amount: v })} ref={amtRef} aria-label="Valor da despesa" onKeyDown={(e) => e.key === "Enter" && add()} />
@@ -1882,6 +1950,7 @@ function ExpensesPage({ s, trip, m, update, toast, ask }) {
           <div><div className="kl">A pagar (fatura e pendentes)</div><div className="kv">{brl(sum(m.exps.filter((e) => ["realizada", "pendente"].includes(e.status)), (e) => e.amount))}</div></div>
           <div><div className="kl">Reembolsado</div><div className="kv">{brl(sum(m.exps.filter((e) => e.status === "reembolsada"), (e) => e.amount))}</div><div className="kh">Fora dos totais</div></div>
           <div><div className="kl">Compartilhadas</div><div className="kv">{brl(sharedTotal)}</div><div className="kh">Contadas uma única vez</div></div>
+          {m.pvReal > 0 && <div style={{ gridColumn: "1/-1" }}><div className="kl"><Lock size={13} />Gastos pessoais de outros membros</div><div className="kv" style={{ fontSize: 17 }}>{brl(m.pvReal)}</div><div className="kh">Só o total entra no orçamento; os detalhes são privados de quem lançou</div></div>}
           <div><div className="kl"><Gift size={13} />Economia com benefícios</div><div className="kv" style={{ color: "var(--green)" }}>{brl(m.savBenefit)}</div><div className="kh">Valor sem benefício − pago</div></div>
         </div>
       </div>
@@ -1890,19 +1959,19 @@ function ExpensesPage({ s, trip, m, update, toast, ask }) {
         <div className="searchbox" style={{ width: 240 }}><Search size={15} /><input className="inp" placeholder="Buscar despesa" value={fq} onChange={(e) => setFq(e.target.value)} aria-label="Buscar despesa" /></div>
         <Sel value={fc} onChange={setFc} style={{ width: 210 }} aria-label="Categoria" opts={[["", "Todas as categorias"], ...CATS.map((c) => [c, c])]} />
         <Sel value={fs} onChange={setFs} style={{ width: 170 }} aria-label="Situação" opts={[["", "Todas as situações"], ...EXP_STATUS.map(([k]) => [k, EXP_LABEL[k]])]} />
-        <span style={{ flex: 1 }} /><button className="btn" onClick={() => setEdit({})}><Plus size={15} />Despesa detalhada</button><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button>
+        <span style={{ flex: 1 }} /><button className="act btn" onClick={() => setEdit({})}><Plus size={15} />Despesa detalhada</button><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button>
       </div>
       {!m.exps.length ? <div className="card"><Empty icon={Receipt} title="Nenhuma despesa registrada" text="Use o lançamento rápido acima durante a viagem: categoria, valor e pronto. Os detalhes podem ser completados depois." /></div> : (
         <div className="tblwrap"><table className="tbl"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Forma</th><th className="r">Valor</th><th>Situação</th><th></th></tr></thead>
           <tbody>{list.map((e) => { const ro = ruleOf(programs, e.benefit); const sv = e.benefit ? r2(num(e.benefit.full) - e.amount) : 0; return <tr key={e.id} style={{ opacity: e.status === "reembolsada" ? 0.6 : 1 }}>
             <td>{fdate(e.date)}</td>
-            <td><b style={{ fontWeight: 600 }}>{e.description}</b>{e.shared && <span className="badge" style={{ marginLeft: 6 }} title={(e.splits || []).map((x) => `${x.person}: ${brl(x.amount)}`).join(", ")}><Users size={11} />Dividida{e.splits?.length ? ` por ${e.splits.length}` : ""}</span>}{e.benefit && <span className="badge b-sand" style={{ marginLeft: 6 }}><Gift size={11} />{ro ? ro.p.name : "Benefício"}{sv > 0 ? `, −${brl(sv)}` : ""}</span>}<div className="muted" style={{ fontSize: 12 }}>{[e.place, e.person && `pago por ${e.person}`].filter(Boolean).join(", ")}</div></td>
+            <td><b style={{ fontWeight: 600 }}>{e.description}</b>{e.private && sharedTrip && <span className="badge b-sand" style={{ marginLeft: 6 }} title="Só você vê os detalhes"><Lock size={11} />Privada</span>}{e.shared && <span className="badge" style={{ marginLeft: 6 }} title={(e.splits || []).map((x) => `${x.person}: ${brl(x.amount)}`).join(", ")}><Users size={11} />Dividida{e.splits?.length ? ` por ${e.splits.length}` : ""}</span>}{e.benefit && <span className="badge b-sand" style={{ marginLeft: 6 }}><Gift size={11} />{ro ? ro.p.name : "Benefício"}{sv > 0 ? `, −${brl(sv)}` : ""}</span>}<div className="muted" style={{ fontSize: 12 }}>{[e.place, e.person && `pago por ${e.person}`].filter(Boolean).join(", ")}</div></td>
             <td><span className="dot" style={{ background: catColor(e.category), marginRight: 7 }} />{e.category}</td><td>{e.method}</td><td className="r"><b>{brl(e.amount)}</b></td>
             <td><span className={`badge ${stBadge[e.status]}`}>{EXP_LABEL[e.status]}</span></td>
-            <td className="r" style={{ whiteSpace: "nowrap" }}><button className="ib" aria-label="Editar" onClick={() => setEdit(e)}><Pencil size={15} /></button><button className="ib dng" aria-label="Excluir" onClick={() => del(e)}><Trash2 size={15} /></button></td>
+            <td className="r" style={{ whiteSpace: "nowrap" }}>{rowCan(e) ? <><button className="ib" aria-label="Editar" onClick={() => setEdit(e)}><Pencil size={15} /></button><button className="ib dng" aria-label="Excluir" onClick={() => del(e)}><Trash2 size={15} /></button></> : <span className="muted" title="Lançada por outro membro" style={{ fontSize: 12 }}>outro membro</span>}</td>
           </tr>; })}{!list.length && <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: 26 }}>Nenhuma despesa com esses filtros.</td></tr>}</tbody>
         </table></div>)}
-      {edit && <ExpenseForm initial={edit} trip={trip} programs={programs} onSave={save} onClose={() => setEdit(null)} />}
+      {edit && <ExpenseForm sharedTrip={sharedTrip} initial={edit} trip={trip} programs={programs} onSave={save} onClose={() => setEdit(null)} />}
     </div>
   );
 }
@@ -2377,11 +2446,79 @@ function ConfigPage({ s, trip, m, update, toast, ask, loadDemo, persist, storeMo
       </div>
       <div className="grid">
         <div className="card"><h3>Histórico de alterações<small>últimas {logs.length}</small></h3>
-          {logs.length ? <div className="grid" style={{ gap: 0 }}>{logs.map((l) => <div key={l.id} style={{ display: "grid", gridTemplateColumns: "92px 1fr", gap: 10, fontSize: 13, padding: "8px 0", borderTop: "1px solid #EFF4F5" }}><span className="muted">{fdate(l.at.slice(0, 10))} {l.at.slice(11, 16)}</span><span>{l.text}</span></div>)}</div> : <p className="muted" style={{ margin: 0, fontSize: 13 }}>As alterações financeiras relevantes aparecem aqui.</p>}
+          {logs.length ? <div className="grid" style={{ gap: 0 }}>{logs.map((l) => <div key={l.id} style={{ display: "grid", gridTemplateColumns: "92px 1fr", gap: 10, fontSize: 13, padding: "8px 0", borderTop: "1px solid #EFF4F5" }}><span className="muted">{fdate(l.at.slice(0, 10))} {l.at.slice(11, 16)}</span><span>{l.text}{l.by && l.by !== account ? <span className="muted"> ({l.by})</span> : null}</span></div>)}</div> : <p className="muted" style={{ margin: 0, fontSize: 13 }}>As alterações financeiras relevantes aparecem aqui.</p>}
         </div>
         <div className="card" style={{ background: "#FAFCFC" }}><h3>Privacidade</h3><p className="muted" style={{ margin: 0, fontSize: 13 }}>O aplicativo não solicita nem armazena números de cartão, senhas bancárias ou credenciais de programas de fidelidade. Registre apenas a forma de pagamento e o saldo de pontos.</p></div>
       </div>
     </div>
+  );
+}
+
+// ---------- Compartilhamento em família ----------
+const ROLE_LABEL = { owner: "Organizador", editor: "Editor", participante: "Participante", leitor: "Leitor" };
+const ROLE_DESC = { editor: "Edita orçamento, cotações, pagamentos, roteiro e despesas.", participante: "Lança despesas e atividades. Não mexe em cotações nem pagamentos.", leitor: "Só visualiza." };
+const SHARE_ERR = {
+  LIMITE_COMPARTILHAR: "O compartilhamento faz parte do plano Família.",
+  LIMITE_MEMBROS: "A viagem já tem o máximo de 6 pessoas, contando os convites pendentes.",
+  CONVITE_INVALIDO: "Este convite não existe mais ou foi cancelado pelo organizador.",
+  CONVITE_USADO: "Este convite já foi usado por outra pessoa. Peça um novo ao organizador.",
+  CONVITE_EXPIRADO: "Este convite expirou. Peça um novo ao organizador.",
+  CONVITE_PROPRIO: "Este convite é de uma viagem sua.",
+  SEM_PERMISSAO: "Você não tem permissão para isso.",
+};
+const shareErr = (e) => { const m = String(e?.message || ""); const k = Object.keys(SHARE_ERR).find((x) => m.includes(x)); return k ? SHARE_ERR[k] : "Não foi possível concluir. Verifique a conexão e tente de novo."; };
+
+function ShareModal({ trip, s, me, rpc, reload, toast, guard, ask, onClose }) {
+  const info = s.shared?.[trip.id]; const owner = trip._owner || me; const isOwner = owner === me;
+  const members = (info?.members || []);
+  const people = peopleOf(trip);
+  const [invites, setInvites] = useState([]); const [role, setRole] = useState("participante"); const [traveler, setTraveler] = useState(""); const [busy, setBusy] = useState(false);
+  const loadInv = async () => { if (!isOwner) return; try { setInvites(await rpc.invites(trip.id)); } catch (e) { /* sem convites */ } };
+  useEffect(() => { loadInv(); }, []); // eslint-disable-line
+  const link = (t) => `${window.location.origin}/?convite=${t}`;
+  const msg = (t) => `Oi! Te convidei para a viagem "${trip.name}" no Férias Planejadas. Entre por este link (vale 7 dias): ${link(t)}`;
+  const copy = async (t) => { try { await navigator.clipboard.writeText(link(t)); toast("Link do convite copiado"); } catch (e) { toast(link(t), "info"); } };
+  const run = async (fn, ok) => { setBusy(true); try { await fn(); if (ok) toast(ok); await reload(); await loadInv(); } catch (e) { if (String(e?.message).includes("LIMITE_COMPARTILHAR")) guard("share"); else toast(shareErr(e), "err"); } setBusy(false); };
+  const create = () => { if (!guard("share")) return; run(async () => { const tok = await rpc.call("create_invite", { p_trip: trip.id, p_role: role, p_traveler: traveler || null }); setTraveler(""); await copy(tok); }); };
+  const usedNames = new Set(members.map((x) => x.traveler_name).filter(Boolean));
+  return (
+    <Modal wide title={isOwner ? `Compartilhar “${trip.name}”` : `Pessoas em “${trip.name}”`} onClose={onClose}>
+      <div className="grid" style={{ gap: 18 }}>
+        <div>
+          <div className="kl" style={{ marginBottom: 8 }}>Quem participa</div>
+          {members.length <= 1 && isOwner ? <p className="muted" style={{ margin: 0, fontSize: 13 }}>Ainda só você. Convide a família abaixo: cada pessoa usa a própria conta, no próprio celular.</p> : (
+            <div className="tblwrap"><table className="tbl"><thead><tr><th>Pessoa</th><th>Papel</th><th>Nome na viagem</th><th></th></tr></thead>
+              <tbody>{members.map((x) => {
+                const self = x.member_id === me; const isOwnerRow = x.role === "owner";
+                return <tr key={x.member_id}>
+                  <td>{x.email}{self && <span className="badge" style={{ marginLeft: 6 }}>você</span>}</td>
+                  <td>{isOwner && !isOwnerRow ? <select className="sel" style={{ width: 150, padding: "5px 8px" }} value={x.role} disabled={busy} onChange={(e) => run(() => rpc.call("update_member", { p_trip: trip.id, p_member: x.member_id, p_role: e.target.value, p_traveler: x.traveler_name }), "Papel atualizado")}>{["editor", "participante", "leitor"].map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}</select> : <span className={`badge ${isOwnerRow ? "b-green" : "b-blue"}`}>{ROLE_LABEL[x.role]}</span>}</td>
+                  <td>{isOwner ? <select className="sel" style={{ width: 160, padding: "5px 8px" }} value={x.traveler_name || ""} disabled={busy} onChange={(e) => run(() => rpc.call("update_member", { p_trip: trip.id, p_member: x.member_id, p_role: isOwnerRow ? null : x.role, p_traveler: e.target.value }), "Nome vinculado")}><option value="">Não vinculado</option>{people.map((p) => <option key={p} value={p}>{p}</option>)}</select> : (x.traveler_name || "—")}</td>
+                  <td className="r">{(isOwner && !isOwnerRow) || (self && !isOwnerRow) ? <button className="btn sm danger" disabled={busy} onClick={() => ask({ title: self ? "Sair da viagem" : "Remover da viagem", danger: true, cta: self ? "Sair" : "Remover", message: self ? `Você deixará de ver “${trip.name}”. As despesas que você lançou continuam na viagem; as privadas seguem invisíveis para os outros.` : `${x.email} deixará de ver a viagem. O que essa pessoa lançou continua registrado.`, onConfirm: () => run(async () => { await rpc.call("remove_member", { p_owner: owner, p_trip: trip.id, p_member: x.member_id }); if (self) onClose(); }, self ? "Você saiu da viagem" : "Pessoa removida") })}>{self ? "Sair" : "Remover"}</button> : null}</td>
+                </tr>;
+              })}</tbody></table></div>
+          )}
+          {isOwner && people.length > 0 && <p className="note" style={{ marginTop: 8 }}><Info size={14} />O “nome na viagem” liga a conta a um viajante: as despesas dessa pessoa já saem com “quem pagou” preenchido, e o acerto de contas fica automático.</p>}
+        </div>
+        {isOwner && <div className="benefit" style={{ background: "#F3F9FB", borderColor: "#D6EAF1" }}>
+          <div className="kl" style={{ marginBottom: 10 }}>Convidar alguém</div>
+          <div className="form form3">
+            <Fld label="Papel"><Sel value={role} onChange={setRole} opts={["editor", "participante", "leitor"].map((r) => [r, ROLE_LABEL[r]])} /></Fld>
+            <Fld label="Nome na viagem (opcional)"><Sel value={traveler} onChange={setTraveler} opts={[["", "Escolher depois"], ...people.filter((p) => !usedNames.has(p)).map((p) => [p, p])]} /></Fld>
+            <div className="fld" style={{ alignSelf: "end" }}><button className="btn pri" disabled={busy} style={{ width: "100%", justifyContent: "center" }} onClick={create}><Plus size={15} />{busy ? "Gerando…" : "Gerar link de convite"}</button></div>
+          </div>
+          <p className="note" style={{ marginTop: 8 }}><Info size={14} />{ROLE_DESC[role]} O link vale 7 dias e serve para uma pessoa. Quem não tiver conta cria uma gratuita ao abrir.</p>
+          {invites.length > 0 && <div className="grid" style={{ gap: 8, marginTop: 12 }}>{invites.map((v) => (
+            <div key={v.token} className="row" style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 10, padding: "8px 10px", fontSize: 13 }}>
+              <span className="badge b-blue">{ROLE_LABEL[v.role]}</span><span>{v.traveler_name || "Convite pendente"}</span><span className="muted" style={{ fontSize: 12 }}>vale até {fdate(String(v.expires_at).slice(0, 10))}</span><span style={{ flex: 1 }} />
+              <button className="btn sm" onClick={() => copy(v.token)}><Copy size={13} />Copiar link</button>
+              <a className="btn sm" href={`https://wa.me/?text=${encodeURIComponent(msg(v.token))}`} target="_blank" rel="noreferrer">WhatsApp</a>
+              <button className="btn sm ghost danger" disabled={busy} onClick={() => run(() => rpc.call("revoke_invite", { p_token: v.token }), "Convite cancelado")}>Cancelar</button>
+            </div>))}</div>}
+        </div>}
+        <div className="note"><Lock size={14} /><span>Despesas privadas (por padrão, <b>Compras e lembranças</b> e <b>Emergências</b>) só aparecem para quem as cadastrou, inclusive para o organizador. Os demais veem apenas o total em “Gastos pessoais”, sem descrição, local ou autor. Clubes de benefícios e pontos continuam pessoais.</span></div>
+      </div>
+    </Modal>
   );
 }
 
@@ -2392,6 +2529,7 @@ const LIMITS = {
   programs: { key: "max_programs", title: "Mais clubes e programas", text: (n) => `O plano Gratuito inclui ${n} clube ou programa de benefícios. Assine para acompanhar todos os seus clubes, pontos e milhas.` },
   memberships: { key: "max_memberships_per_program", title: "Mais adesões no mesmo clube", text: (n) => `O plano Gratuito permite ${n} adesão por clube. Para registrar os cartões de outros viajantes, como várias adesões do Prime Gourmet na mesma mesa, assine o Viajante ou o Família.` },
   weights: { flag: "can_edit_weights", title: "Comparativo personalizado", text: () => "No plano Gratuito o ranking usa os pesos padrão. Assine para ajustar o peso de preço, hospedagem, voo e serviços conforme o que importa para você." },
+  share: { flag: "max_members_per_trip", title: "Viagem compartilhada", text: () => "Compartilhar a viagem com a família faz parte do plano Família: cada pessoa lança os próprios gastos no celular e o acerto de contas sai automático." },
   import: { flag: "can_import_csv", title: "Importação de planilhas", text: () => "A importação de CSV está disponível nos planos Viajante e Família. A exportação e o backup continuam livres em todos os planos." },
 };
 const LIMIT_CODES = { LIMITE_VIAGENS: "trips", LIMITE_COTACOES: "quotes", LIMITE_PROGRAMAS: "programs", LIMITE_ADESOES: "memberships" };
@@ -2418,7 +2556,7 @@ function planFeatures(l) {
     [l.max_programs == null ? "Clubes, pontos e milhas ilimitados" : `${l.max_programs} clube ou programa de benefícios`, true],
     [l.max_memberships_per_program == null ? "Várias adesões por clube" : `${l.max_memberships_per_program} adesão por clube`, true],
     ["Importação de planilhas CSV", !!l.can_import_csv],
-    [l.max_members_per_trip ? `Viagem compartilhada com até ${l.max_members_per_trip} pessoas (em breve)` : "Viagem compartilhada em família", !!l.max_members_per_trip],
+    [l.max_members_per_trip ? `Viagem compartilhada com até ${l.max_members_per_trip} pessoas` : "Viagem compartilhada em família", !!l.max_members_per_trip],
     ["Exportação CSV e backup completo", true],
   ];
 }
@@ -2518,6 +2656,10 @@ function PlansPage({ plan, refreshPlan, storeMode, toast }) {
 
 // ---------- Raiz: autenticação e escolha do armazenamento ----------
 export default function App() {
+  useState(() => {
+    try { const t = new URLSearchParams(window.location.search).get("convite"); if (t) { localStorage.setItem("fp-convite", t); window.history.replaceState({}, "", window.location.pathname); } } catch (e) { /* ignore */ }
+    return null;
+  });
   const [session, setSession] = useState(cloudEnabled ? undefined : null);
   const [recovery, setRecovery] = useState(false);
   useEffect(() => {
@@ -2530,5 +2672,5 @@ export default function App() {
   const store = useMemo(() => (cloudEnabled ? (uidKey ? createCloudStore(supabase, uidKey) : null) : createLocalStore()), [uidKey]);
   if (cloudEnabled && session === undefined) return <div className="fp auth-wrap"><p className="muted">Carregando…</p></div>;
   if (cloudEnabled && (!session || recovery)) return <Auth supabase={supabase} recovery={recovery} onRecovered={() => setRecovery(false)} />;
-  return <AppInner key={uidKey || "local"} store={store} account={session?.user?.email || ""} onSignOut={cloudEnabled ? () => supabase.auth.signOut() : null} />;
+  return <AppInner key={uidKey || "local"} store={store} me={uidKey || "local"} account={session?.user?.email || ""} onSignOut={cloudEnabled ? () => supabase.auth.signOut() : null} />;
 }
