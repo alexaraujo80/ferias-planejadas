@@ -80,17 +80,65 @@ Crie a conta na tela de entrada e confirme o e-mail. Se você já usava o app sa
 - Edição simultânea do mesmo registro em dois aparelhos: vale a última gravação.
 - O pacote JavaScript tem cerca de 280 kB compactado; dividir por tela é uma melhoria futura.
 
-## Fase 3: evolução para SaaS (planejado, não implementado)
+## Planos, teste grátis e Stripe
 
-Conforme a especificação, esta fase é de planejamento. A base já está preparada:
+| | Gratuito | Viajante | Família |
+| --- | --- | --- | --- |
+| Preço | R$ 0 | R$ 7,90/mês ou R$ 79/ano | R$ 12,90/mês ou R$ 129/ano |
+| Viagens ativas | 1 | Ilimitadas | Ilimitadas |
+| Cotações por viagem | 3 | Ilimitadas | Ilimitadas |
+| Pesos do comparativo | Padrão | Personalizados | Personalizados |
+| Clubes e programas | 1 (1 adesão) | Ilimitados | Ilimitados |
+| Importação CSV | — | Sim | Sim |
+| Viagem compartilhada | — | — | Até 6 pessoas (próxima etapa) |
 
-| Tema | Já existe | Próximo passo |
-| --- | --- | --- |
-| Autenticação | E-mail e senha, confirmação, recuperação de senha | Login com Google, MFA |
-| Multiusuários | Dados isolados por `user_id` com RLS | Tabela `organizations` + `memberships`, para viagens compartilhadas em família |
-| Planos e limites | `profiles.plan` protegido e tabela `plan_limits` | Aplicar limites via gatilho no banco (ex.: número de viagens) |
-| Assinaturas | — | Mercado Pago, Asaas ou Stripe com webhooks em Edge Functions que atualizam `profiles.plan` |
-| Recursos premium | Regras de negócio separadas da interface | Anexos em arquivo, compartilhamento de roteiro, alertas por e-mail |
-| Área administrativa | — | Painel separado usando `service_role` só no servidor |
-| Monitoramento | Logs no console | Sentry e Vercel Analytics |
-| Privacidade (LGPD) | Exportação JSON/CSV e exclusão de dados | Política de privacidade, termos e exclusão de conta pelo app |
+O plano anual equivale a 10 meses (2 meses grátis). Toda conta nova recebe **14 dias do Família, sem cartão**. Ao fim, a conta volta para o Gratuito, sem cobrança. Quem assina durante o teste só é cobrado quando ele termina.
+
+**Onde cada coisa é configurada:** os limites ficam na tabela `plan_limits` do Supabase e podem ser editados no Table Editor, sem deploy. Preços, cupons, métodos de pagamento e o portal do cliente ficam no Stripe. O plano de uma conta só muda pelo webhook do Stripe; o navegador não consegue alterá-lo.
+
+**Ao cair de plano, nada é apagado.** Os limites só impedem criar itens acima do permitido. Viagens, cotações e clubes que já existem continuam editáveis.
+
+### Passo a passo
+
+1. **Banco:** no SQL Editor do Supabase, execute `supabase/002_planos_stripe.sql` (depois do `schema.sql`).
+2. **Produtos no Stripe** (comece em modo de teste): em **Catálogo de produtos**, crie os produtos *Viajante* e *Família*, cada um com dois preços recorrentes em BRL. Em cada preço, abra "Opções avançadas" e preencha a **lookup key** exatamente assim:
+
+   | Produto | Preço | Lookup key |
+   | --- | --- | --- |
+   | Viajante | R$ 7,90 mensal | `viajante_mensal` |
+   | Viajante | R$ 79,00 anual | `viajante_anual` |
+   | Família | R$ 12,90 mensal | `familia_mensal` |
+   | Família | R$ 129,00 anual | `familia_anual` |
+
+   Para mudar um preço depois, crie o novo preço e **transfira a lookup key** para ele. A página de planos atualiza sozinha.
+3. **Métodos de pagamento:** em **Configurações → Pagamentos → Métodos de pagamento**, ative Cartões, Boleto e Pix.
+4. **Portal do cliente:** em **Configurações → Billing → Portal do cliente**, ative cancelamento de assinatura, atualização da forma de pagamento, histórico de faturas e **troca de plano** entre os quatro preços acima.
+5. **Webhook:** em **Desenvolvedores → Webhooks → Adicionar destino**, use `https://SEU-APP.vercel.app/api/webhook` e selecione os eventos:
+   `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`.
+6. **Variáveis na Vercel** (Settings → Environment Variables), **sem** o prefixo `VITE_`:
+
+   | Nome | Onde encontrar |
+   | --- | --- |
+   | `STRIPE_SECRET_KEY` | Stripe → Desenvolvedores → Chaves de API (`sk_test_...` no modo de teste) |
+   | `STRIPE_WEBHOOK_SECRET` | Na tela do webhook criado (`whsec_...`) |
+   | `SUPABASE_SERVICE_ROLE_KEY` | Criada pela integração Supabase ↔ Vercel; confira se existe |
+   | `SUPABASE_URL` | Criada pela integração; ou use o mesmo valor de `VITE_SUPABASE_URL` |
+
+7. Faça **Redeploy**. Teste com o cartão `4242 4242 4242 4242`, qualquer data futura e qualquer CVC.
+8. Quando estiver tudo certo, repita os passos 2 a 6 no **modo de produção** do Stripe e troque as chaves na Vercel.
+
+### Formas de pagamento no Brasil
+
+Cartão de crédito Visa e Mastercard e boleto funcionam na assinatura com renovação automática. O Pix fica disponível no plano anual como **pagamento único de 12 meses**, sem renovação automática, porque o Pix recorrente (Pix Automático) não está disponível para contas Stripe no Brasil. Amex, Elo e Hipercard não são aceitos pelo Stripe no Brasil.
+
+## Próximos passos (Fase 3)
+
+| Tema | Situação |
+| --- | --- |
+| Planos, limites, teste grátis e Stripe | Implementado |
+| Várias adesões por clube e conta da mesa com vários pares | Implementado |
+| Viagens compartilhadas (convites, papéis, atualização ao vivo) | Próxima etapa |
+| Anexos em arquivo (Supabase Storage privado) | Planejado |
+| Login com Google, MFA | Planejado |
+| Área administrativa, Sentry, Vercel Analytics | Planejado |
+| Política de privacidade, termos e exclusão de conta pelo app | Planejado |

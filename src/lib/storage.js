@@ -25,6 +25,9 @@ export const TABLES = {
   log: { table: "audit_logs", trip: "optional" },
 };
 
+// Sem nuvem não há contas nem cobrança: tudo liberado para uso pessoal.
+const LOCAL_PLAN = { plan: "local", limits: { max_active_trips: null, max_quotes_per_trip: null, max_programs: null, max_memberships_per_program: null, can_edit_weights: true, can_import_csv: true, max_members_per_trip: 0 }, catalog: [] };
+
 export function readBrowserBackup() {
   try { const v = localStorage.getItem(KEY); return v ? JSON.parse(v) : null; } catch (e) { return null; }
 }
@@ -36,12 +39,14 @@ export function createLocalStore() {
       mode: "claude",
       async load() { try { const r = await window.storage.get(KEY, false); return { data: r ? JSON.parse(r.value) : null, ok: true }; } catch (e) { return { data: null, ok: true }; } },
       async save(s) { try { return !!(await window.storage.set(KEY, JSON.stringify(s), false)); } catch (e) { return false; } },
+      async plan() { return LOCAL_PLAN; },
     };
   }
   return {
     mode: "local",
     async load() { try { const v = localStorage.getItem(KEY); return { data: v ? JSON.parse(v) : null, ok: true }; } catch (e) { return { data: null, ok: false }; } },
     async save(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); return true; } catch (e) { return false; } },
+    async plan() { return LOCAL_PLAN; },
   };
 }
 
@@ -73,6 +78,11 @@ export function createCloudStore(supabase, userId) {
 
   return {
     mode: "cloud",
+    async plan() {
+      const { data, error } = await supabase.rpc("get_my_plan");
+      if (error) { console.error("Falha ao consultar o plano", error); return null; }
+      return data;
+    },
     async load() {
       try {
         const state = {};
@@ -114,6 +124,9 @@ export function createCloudStore(supabase, userId) {
         snap = next;
         return true;
       } catch (e) {
+        const msg = String(e?.message || "");
+        // Recusa por limite do plano (gatilhos do banco): não adianta repetir; o app recarrega e avisa.
+        if (msg.startsWith("LIMITE_")) return { limit: msg.split(/\s/)[0] };
         console.error("Falha ao sincronizar", e);
         return false; // o snapshot não muda: tudo que faltou é reenviado na próxima tentativa
       }

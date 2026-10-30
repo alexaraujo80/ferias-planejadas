@@ -1,10 +1,12 @@
 {
   "name": "ferias-planejadas",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "Planejamento, cotações e controle financeiro de viagens de férias",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -15,7 +17,8 @@
     "lucide-react": "0.383.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "recharts": "^2.12.7"
+    "recharts": "^2.12.7",
+    "stripe": "^17.7.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",

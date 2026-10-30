@@ -4,8 +4,9 @@ import {
   LayoutDashboard, Plane, Wallet, FileText, CalendarClock, MapPin, Receipt, BarChart3, Settings, Plus, Trash2, Pencil,
   Copy, Archive, ArchiveRestore, Check, X, Star, AlertTriangle, Search, Download, Printer, Sun, Info, Award, Menu,
   Users, CheckCircle2, Upload, ExternalLink, ChevronLeft, ChevronRight, Database, Eye, Heart,
-  Gift, Utensils, Ticket, Umbrella, Landmark, Car, Building2, Paperclip, Calculator, Coins, ArrowRight,
+  Gift, Utensils, Ticket, Umbrella, Landmark, Car, Building2, Paperclip, Calculator, Coins, ArrowRight, Crown, Lock, Ship, Anchor,
 } from "lucide-react";
+import { api } from "./lib/billing";
 import { cloudEnabled, supabase } from "./lib/supabase";
 import { createCloudStore, createLocalStore, readBrowserBackup } from "./lib/storage";
 import Auth from "./components/Auth";
@@ -45,8 +46,19 @@ const monthLabel = (ym) => { const [y, m] = ym.split("-"); return `${MONTHS[Numb
 const MONTHS_FULL = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
 // ---------- Domínio ----------
-const CATS = ["Passagens aéreas", "Hospedagem", "Pacotes turísticos", "Alimentação", "Transporte local", "Passeios e excursões", "Ingressos", "Seguro-viagem", "Bagagem", "Estacionamento e aeroporto", "Documentação", "Compras e lembranças", "Emergências", "Outras despesas"];
-const CAT_COLORS = ["#167D9A", "#75D8C3", "#E8A23A", "#21865B", "#5BA7C4", "#F2C48D", "#2E5E73", "#A7E3D6", "#D9534F", "#8FB8C9", "#C98E3B", "#4C9A7E", "#B8D9E4", "#7A8F99"];
+const CATS = ["Passagens aéreas", "Hospedagem", "Pacotes turísticos", "Alimentação", "Transporte local", "Passeios e excursões", "Ingressos", "Seguro-viagem", "Bagagem", "Estacionamento e aeroporto", "Documentação", "Compras e lembranças", "Emergências", "Outras despesas",
+  // viagem de carro e cruzeiro (adicionadas ao fim para preservar as cores das categorias existentes)
+  "Aluguel de carro", "Combustível", "Pedágios", "Cruzeiro (cabine)", "Taxas portuárias", "Taxa de serviço (gorjetas)", "Pacotes a bordo", "Excursões em terra"];
+const CAT_GROUPS = [
+  ["Transporte até o destino", ["Passagens aéreas", "Bagagem", "Aluguel de carro", "Combustível", "Pedágios", "Estacionamento e aeroporto"]],
+  ["Cruzeiro", ["Cruzeiro (cabine)", "Taxas portuárias", "Taxa de serviço (gorjetas)", "Pacotes a bordo", "Excursões em terra"]],
+  ["Hospedagem e pacotes", ["Hospedagem", "Pacotes turísticos"]],
+  ["No destino", ["Alimentação", "Transporte local", "Passeios e excursões", "Ingressos", "Compras e lembranças"]],
+  ["Proteção e documentos", ["Seguro-viagem", "Documentação", "Emergências"]],
+  ["Outros", ["Outras despesas"]],
+];
+const TRANSPORTS = ["Avião", "Carro próprio", "Carro alugado", "Cruzeiro", "Ônibus", "Trem ou outro"];
+const CAT_COLORS = ["#167D9A", "#75D8C3", "#E8A23A", "#21865B", "#5BA7C4", "#F2C48D", "#2E5E73", "#A7E3D6", "#D9534F", "#8FB8C9", "#C98E3B", "#4C9A7E", "#B8D9E4", "#7A8F99", "#3E8FB0", "#F0B35A", "#9C6B2F", "#0F5C73", "#5FC7B2", "#B5473F", "#7FB7A4", "#C7A06A"];
 const catColor = (c) => CAT_COLORS[Math.max(0, CATS.indexOf(c)) % CAT_COLORS.length];
 const METHODS = ["Pix", "Cartão de crédito", "Cartão de débito", "Dinheiro", "Boleto", "Transferência", "Pontos/milhas", "Outro"];
 const TRIP_STATUS = [["planejando", "Planejando"], ["cotando", "Cotando"], ["contratada", "Contratada"], ["preparacao", "Em preparação"], ["andamento", "Em andamento"], ["concluida", "Concluída"]];
@@ -85,9 +97,9 @@ const effStatus = (p) => {
 const withLog = (st, tripId, text) => ({ ...st, log: [{ id: uid(), tripId, text, at: new Date().toISOString() }, ...(st.log || [])].slice(0, 200) });
 
 // ---------- Fase 2: roteiro tipado, benefícios, divisão de despesas ----------
-const ITIN_TYPES = [["restaurante", "Restaurante"], ["passeio", "Passeio"], ["praia", "Praia"], ["atracao", "Atração"], ["deslocamento", "Deslocamento"], ["hospedagem", "Hospedagem"], ["outro", "Outro"]];
+const ITIN_TYPES = [["restaurante", "Restaurante"], ["passeio", "Passeio"], ["praia", "Praia"], ["atracao", "Atração"], ["deslocamento", "Deslocamento"], ["hospedagem", "Hospedagem"], ["escala", "Escala do cruzeiro"], ["outro", "Outro"]];
 const ITIN_LABEL = Object.fromEntries(ITIN_TYPES);
-const ITIN_CAT = { restaurante: "Alimentação", passeio: "Passeios e excursões", praia: "Passeios e excursões", atracao: "Ingressos", deslocamento: "Transporte local", hospedagem: "Hospedagem", outro: "Outras despesas" };
+const ITIN_CAT = { restaurante: "Alimentação", passeio: "Passeios e excursões", praia: "Passeios e excursões", atracao: "Ingressos", deslocamento: "Transporte local", hospedagem: "Hospedagem", escala: "Excursões em terra", outro: "Outras despesas" };
 const PROG_TYPES = [["clube", "Clube de benefícios"], ["milhas", "Pontos e milhas"], ["cartao", "Cartão ou banco"], ["outro", "Outro"]];
 const PROG_LABEL = Object.fromEntries(PROG_TYPES);
 const COST_MODELS = [["gratis", "Gratuito"], ["anual", "Anuidade"], ["mensal", "Mensalidade"], ["unico", "Pagamento único"]];
@@ -97,24 +109,37 @@ const DOC_TYPES = ["Documento de identidade", "Passaporte ou visto", "Voucher de
 const REAL_ST = ["realizada", "paga", "pendente"];
 const peopleOf = (t) => { const n = String(t.travelerNames || "").split(",").map((x) => x.trim()).filter(Boolean); return n.length ? n : Array.from({ length: Math.max(1, travelers(t)) }, (_, i) => `Viajante ${i + 1}`); };
 const ruleOf = (programs, b) => { const p = b && (programs || []).find((x) => x.id === b.programId); return p ? { p, r: (p.rules || []).find((x) => x.id === b.ruleId) || null } : null; };
+// Adesões de um clube (um cartão/conta por titular). Programas antigos viram uma adesão única.
+const membershipsOf = (p) => (p?.memberships?.length ? p.memberships : [{ id: "m0", holder: "", fee: p?.fee, startDate: p?.startDate, endDate: p?.endDate }]);
+const feeOf = (p) => sum(membershipsOf(p), (m) => m.fee);
+const activeMemberships = (p, d) => membershipsOf(p).filter((m) => (!m.startDate || !d || d >= m.startDate) && (!m.endDate || !d || d <= m.endDate));
+const itemsOf = (b) => (Array.isArray(b?.items) ? b.items : [b?.a, b?.b]).map(num).filter((x) => x > 0);
+// "Compre 1, leve 2" com k adesões: os 2k itens mais caros formam pares adjacentes; em cada par paga-se o mais caro.
+// Essa combinação maximiza a economia (soma do item mais barato de cada par).
+function pairSavings(items, k) {
+  const v = items.slice().sort((x, y) => y - x);
+  const pairs = Math.max(0, Math.min(k, Math.floor(v.length / 2)));
+  let saved = 0; for (let i = 0; i < pairs; i++) saved += v[2 * i + 1];
+  return { pairs, saved: r2(saved), unpaired: v.length - pairs * 2 };
+}
 function applyRule(rule, b) {
   if (!rule || !b) return null;
-  if (rule.kind === "2x1") { const a = num(b.a) || 0, c = num(b.b) || 0; if (!a && !c) return null; return { full: r2(a + c), paid: r2(Math.max(a, c)) }; }
+  if (rule.kind === "2x1") { const it = itemsOf(b); if (!it.length) return null; const full = r2(it.reduce((x, y) => x + y, 0)); const ps = pairSavings(it, num(b.uses) || 1); return { full, paid: r2(full - ps.saved), ...ps }; }
   const F = num(b.full); if (F == null) return null;
   if (rule.kind === "pct") return { full: F, paid: r2(F * (1 - (num(rule.value) || 0) / 100)) };
   if (rule.kind === "fixed") return { full: F, paid: r2(Math.max(0, F - (num(rule.value) || 0))) };
   return { full: F, paid: null };
 }
-const inPeriod = (p, d) => (!p.startDate || !d || d >= p.startDate) && (!p.endDate || !d || d <= p.endDate);
+const inPeriod = (p, d) => activeMemberships(p, d).length > 0;
 function programStats(s, p, tripId) {
   const linked = new Set(s.expenses.map((e) => e.itineraryId).filter(Boolean));
   const exps = s.expenses.filter((e) => e.benefit?.programId === p.id && REAL_ST.includes(e.status) && num(e.benefit.full) > 0 && (!tripId || e.tripId === tripId) && inPeriod(p, e.date));
   const its = s.itinerary.filter((i) => i.benefit?.programId === p.id && i.status !== "cancelada" && !linked.has(i.id) && num(i.benefit.full) > 0 && (!tripId || i.tripId === tripId) && inPeriod(p, i.date));
   const realized = sum(exps, (e) => num(e.benefit.full) - num(e.amount));
   const planned = sum(its, (i) => num(i.benefit.full) - (num(i.estimated) || 0));
-  const fee = num(p.fee) || 0;
+  const fee = feeOf(p);
   const yearFee = p.costModel === "anual" || p.costModel === "unico" ? fee : p.costModel === "mensal" ? r2(fee * 12) : 0;
-  return { uses: exps.length, plannedUses: its.length, realized, planned, yearFee, net: r2(realized - yearFee), left: Math.max(0, r2(yearFee - realized - planned)) };
+  return { uses: exps.reduce((x, e) => x + (num(e.benefit.uses) || 1), 0), plannedUses: its.length, realized, planned, yearFee, net: r2(realized - yearFee), left: Math.max(0, r2(yearFee - realized - planned)) };
 }
 function splitEqual(total, people) { if (!people.length) return []; const base = Math.floor((total * 100) / people.length) / 100; return people.map((p, i) => ({ person: p, amount: i === people.length - 1 ? r2(total - base * (people.length - 1)) : base })); }
 function settlement(exps, people) {
@@ -360,6 +385,12 @@ const Sel = ({ value, onChange, opts, ...p }) => (
     {opts.map((o) => (Array.isArray(o) ? <option key={o[0]} value={o[0]}>{o[1]}</option> : <option key={o} value={o}>{o}</option>))}
   </select>
 );
+const CatSel = ({ value, onChange, ...p }) => (
+  <select className="sel" value={value ?? ""} onChange={(e) => onChange(e.target.value)} {...p}>
+    {value && !CATS.includes(value) && <option value={value}>{value}</option>}
+    {CAT_GROUPS.map(([g, cs]) => <optgroup key={g} label={g}>{cs.map((c) => <option key={c} value={c}>{c}</option>)}</optgroup>)}
+  </select>
+);
 const Ta = ({ value, onChange, ...p }) => <textarea className="ta" value={value ?? ""} onChange={(e) => onChange(e.target.value)} {...p} />;
 const Money = React.forwardRef(function Money({ value, onChange, placeholder = "R$ 0,00", className = "inp", ...p }, ref) {
   const display = value === "" || value == null ? "" : BRL.format(Number(value));
@@ -399,12 +430,13 @@ const NAV = [
   { k: "beneficios", l: "Benefícios e fidelidade", i: Gift },
   { k: "despesas", l: "Despesas da viagem", i: Receipt },
   { k: "balanco", l: "Relatórios e balanço", i: BarChart3 },
+  { k: "planos", l: "Planos", i: Crown },
   { k: "config", l: "Configurações", i: Settings },
 ];
 const SUBTITLE = {
   dashboard: "Visão consolidada da viagem ativa", viagens: "Crie, duplique e arquive viagens", planejamento: "Previsto, contratado e pago por item",
   cotacoes: "Propostas das agências e ranking de custo-benefício", pagamentos: "Cronograma de parcelas e obrigações", roteiro: "Atividades organizadas dia a dia",
-  despesas: "Registro rápido dos gastos", beneficios: "Clubes de desconto, pontos e milhas", balanco: "Planejado versus realizado", config: "Dados, exportações e demonstração",
+  despesas: "Registro rápido dos gastos", beneficios: "Clubes de desconto, pontos e milhas", balanco: "Planejado versus realizado", planos: "Escolha o plano ideal para as suas viagens", config: "Dados, exportações e demonstração",
 };
 
 function AppInner({ store, account, onSignOut }) {
@@ -419,6 +451,9 @@ function AppInner({ store, account, onSignOut }) {
   const first = useRef(true);
 
   const [migrate, setMigrate] = useState(null);
+  const [plan, setPlan] = useState(null);
+  const [upgrade, setUpgrade] = useState(null);
+  const refreshPlan = async () => { try { const p = await store.plan(); if (p) setPlan(p); return p; } catch (e) { return null; } };
   const [retry, setRetry] = useState(0);
   const sRef = useRef(s); sRef.current = s;
   const persistRef = useRef(persist); persistRef.current = persist;
@@ -427,31 +462,57 @@ function AppInner({ store, account, onSignOut }) {
     if (r.data) setS({ ...EMPTY, ...r.data });
     setPersist(r.ok ? "saved" : "memory"); setLoaded(true);
     if (!r.ok && store.mode === "cloud") toast("Não foi possível carregar seus dados da nuvem. Verifique a conexão e recarregue a página.", "err");
+    refreshPlan();
     if (store.mode === "cloud" && r.ok && !(r.data?.trips?.length || r.data?.programs?.length)) { const b = readBrowserBackup(); if (b && (b.trips?.length || b.programs?.length)) setMigrate(b); }
   })(); }, [store]); // eslint-disable-line
   useEffect(() => {
     if (!loaded) return;
     if (first.current) { first.current = false; return; }
     setPersist("saving");
-    const h = setTimeout(async () => { const ok = await store.save(s); setPersist(ok ? "saved" : "memory"); }, 450);
+    const h = setTimeout(async () => {
+      const res = await store.save(s);
+      if (res && res.limit) {
+        // O banco recusou por limite do plano: volta ao estado confirmado e explica.
+        const r = await store.load(); if (r.ok && r.data) setS({ ...EMPTY, ...r.data });
+        setPersist("saved"); const k = LIMIT_CODES[res.limit];
+        if (k) setUpgrade({ kind: k }); else toast("Essa alteração não é permitida no seu plano.", "err");
+        return;
+      }
+      setPersist(res === true ? "saved" : "memory");
+    }, 450);
     return () => clearTimeout(h);
   }, [s, loaded]);
 
   useEffect(() => {
     if (persist !== "memory" || store.mode !== "cloud" || !loaded) return;
-    const h = setTimeout(async () => { const ok = await store.save(sRef.current); if (ok) setPersist("saved"); else setRetry((x) => x + 1); }, 8000);
+    const h = setTimeout(async () => { const ok = await store.save(sRef.current); if (ok === true || ok?.limit) setPersist("saved"); else setRetry((x) => x + 1); }, 8000);
     return () => clearTimeout(h);
   }, [persist, loaded, store, retry]);
   useEffect(() => {
     if (store.mode !== "cloud") return;
     const h = async () => {
       if (document.visibilityState !== "visible" || persistRef.current !== "saved") return;
+      refreshPlan();
       const r = await store.load();
       if (r.ok && r.data && persistRef.current === "saved") setS({ ...EMPTY, ...r.data });
     };
     document.addEventListener("visibilitychange", h);
     return () => document.removeEventListener("visibilitychange", h);
   }, [store]);
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const ck = q.get("checkout"), pg = q.get("pagina");
+    if (!ck && !pg) return;
+    window.history.replaceState({}, "", window.location.pathname);
+    if (pg === "planos" || ck) setPage("planos");
+    if (ck === "cancelado") { setTimeout(() => toast("Contratação não concluída. Nada foi cobrado.", "info"), 300); return; }
+    if (ck !== "sucesso") return;
+    setTimeout(() => toast("Recebemos sua contratação. Ativando o plano…"), 300);
+    let n = 0;
+    const t = setInterval(async () => { n++; const p = await refreshPlan(); if ((p && ["active", "trialing", "pago_unico"].includes(p.status)) || n >= 12) clearInterval(t); }, 2500);
+    return () => clearInterval(t);
+  }, []); // eslint-disable-line
 
   const activeTrips = s.trips.filter((t) => !t.archived);
   const trip = s.trips.find((t) => t.id === s.activeTripId) || activeTrips[0] || null;
@@ -464,7 +525,12 @@ function AppInner({ store, account, onSignOut }) {
   const ask = (o) => setConfirm(o);
   const setActive = (id) => update((st) => ({ ...st, activeTripId: id }));
   const go = (p) => { setPage(p); setMenu(false); try { window.scrollTo(0, 0); } catch (e) { } };
-  const ctx = { s, update, trip, m, toast, ask, go, setActive, storeMode: store.mode, account, onSignOut };
+  const guard = (kind, current = 0) => {
+    const info = LIMITS[kind]; const L = plan?.limits; if (!info || !L) return true;
+    const ok = info.flag ? !!L[info.flag] : L[info.key] == null || current < L[info.key];
+    if (!ok) setUpgrade({ kind }); return ok;
+  };
+  const ctx = { s, update, trip, m, toast, ask, go, setActive, storeMode: store.mode, account, onSignOut, plan, refreshPlan, guard };
   const loadDemo = () => {
     if (s.trips.some((t) => t.demo)) { toast("A demonstração já está carregada", "info"); return; }
     const d = buildDemo();
@@ -472,7 +538,7 @@ function AppInner({ store, account, onSignOut }) {
     toast("Viagem de demonstração carregada"); go("dashboard");
   };
 
-  const needsTrip = !["viagens", "config"].includes(page);
+  const needsTrip = !["viagens", "config", "planos"].includes(page);
   let body;
   if (!loaded) body = <div className="empty"><div className="ic"><Sun size={26} /></div><p className="muted">Carregando seus dados…</p></div>;
   else if (needsTrip && !trip) body = (
@@ -482,7 +548,7 @@ function AppInner({ store, account, onSignOut }) {
     </Empty></div>
   );
   else {
-    const P = { dashboard: Dashboard, viagens: TripsPage, planejamento: Planning, cotacoes: QuotesPage, pagamentos: PaymentsPage, roteiro: ItineraryPage, beneficios: BenefitsPage, despesas: ExpensesPage, balanco: BalancePage, config: ConfigPage }[page];
+    const P = { dashboard: Dashboard, viagens: TripsPage, planejamento: Planning, cotacoes: QuotesPage, pagamentos: PaymentsPage, roteiro: ItineraryPage, beneficios: BenefitsPage, despesas: ExpensesPage, balanco: BalancePage, planos: PlansPage, config: ConfigPage }[page];
     body = <P {...ctx} autoNew={newTrip} clearAutoNew={() => setNewTrip(false)} loadDemo={loadDemo} persist={persist} />;
   }
   const navItem = NAV.find((n) => n.k === page);
@@ -505,6 +571,7 @@ function AppInner({ store, account, onSignOut }) {
         <nav className="nav">
           {NAV.map((n) => <button key={n.k} className={page === n.k ? "on" : ""} onClick={() => go(n.k)} aria-current={page === n.k ? "page" : undefined}><n.i size={17} />{n.l}</button>)}
         </nav>
+        {plan && plan.plan !== "local" && <button className="planchip" onClick={() => go("planos")}><Crown size={14} />{planChip(plan)}</button>}
         <div className="side-foot"><span className="dot" style={{ background: pdot[0] }} />{pdot[1]}</div>
       </aside>
       <main className="main">
@@ -534,6 +601,7 @@ function AppInner({ store, account, onSignOut }) {
           </div>
         ))}
       </div>
+      {upgrade && <UpgradeModal kind={upgrade.kind} plan={plan} onClose={() => setUpgrade(null)} go={go} />}
       {confirmState && (
         <Modal title={confirmState.title} onClose={() => setConfirm(null)} footer={<>
           <button className="btn" onClick={() => setConfirm(null)}>Voltar</button>
@@ -711,6 +779,7 @@ function TripForm({ initial, onSave, onClose }) {
         <Fld label="Data de saída"><Inp type="date" value={f.startDate} onChange={(v) => set("startDate", v)} /></Fld>
         <Fld label="Data de retorno" err={e.endDate} hint={d ? `${d.days} dias e ${d.nights} noites` : ""}><Inp type="date" value={f.endDate} onChange={(v) => set("endDate", v)} /></Fld>
         <Fld label="Estilo da viagem"><Sel value={f.style} onChange={(v) => set("style", v)} opts={STYLES} /></Fld>
+        <Fld label="Como vão viajar" full hint="Marque todos que se aplicam. Libera atalhos de combustível, pedágio e despesas de cruzeiro."><div className="row" style={{ gap: 6 }}>{TRANSPORTS.map((t) => { const on = (f.transport || []).includes(t); return <button type="button" key={t} className={`chip ${on ? "on" : ""}`} aria-pressed={on} onClick={() => set("transport", on ? (f.transport || []).filter((x) => x !== t) : [...(f.transport || []), t])}>{t}</button>; })}</div></Fld>
         <div className="sec">Viajantes</div>
         <Fld label="Adultos" err={e.adults}><Inp type="number" min="1" value={f.adults} onChange={(v) => set("adults", v)} /></Fld>
         <Fld label="Crianças"><Inp type="number" min="0" value={f.children} onChange={(v) => set("children", v)} /></Fld>
@@ -729,7 +798,8 @@ function TripForm({ initial, onSave, onClose }) {
   );
 }
 
-function TripsPage({ s, update, toast, ask, setActive, go, trip: active, autoNew, clearAutoNew, loadDemo }) {
+function TripsPage({ s, update, toast, ask, setActive, go, trip: active, autoNew, clearAutoNew, loadDemo, guard = () => true }) {
+  const activeCount = s.trips.filter((t) => !t.archived && !t.demo).length;
   const [edit, setEdit] = useState(autoNew ? {} : null);
   const [arch, setArch] = useState(false);
   useEffect(() => { if (autoNew) clearAutoNew(); }, []); // eslint-disable-line
@@ -755,11 +825,11 @@ function TripsPage({ s, update, toast, ask, setActive, go, trip: active, autoNew
     <div className="grid">
       <div className="row between">
         <div className="tabs"><button className={!arch ? "on" : ""} onClick={() => setArch(false)}>Ativas</button><button className={arch ? "on" : ""} onClick={() => setArch(true)}>Arquivadas</button></div>
-        <button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Nova viagem</button>
+        <button className="btn pri" onClick={() => guard("trips", activeCount) && setEdit({})}><Plus size={16} />Nova viagem</button>
       </div>
       {trips.length === 0 ? (
         <div className="card"><Empty icon={Plane} title={arch ? "Nenhuma viagem arquivada" : "Nenhuma viagem cadastrada"} text={arch ? "Viagens concluídas podem ser arquivadas para manter o histórico sem poluir a lista." : "Crie sua primeira viagem ou explore o aplicativo com dados de demonstração."}>
-          {!arch && <><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Criar viagem</button><button className="btn" onClick={loadDemo}><Database size={16} />Carregar demonstração</button></>}
+          {!arch && <><button className="btn pri" onClick={() => guard("trips", activeCount) && setEdit({})}><Plus size={16} />Criar viagem</button><button className="btn" onClick={loadDemo}><Database size={16} />Carregar demonstração</button></>}
         </Empty></div>
       ) : (
         <div className="grid g3">
@@ -784,8 +854,8 @@ function TripsPage({ s, update, toast, ask, setActive, go, trip: active, autoNew
                   {!arch && isA && <button className="btn sm pri" onClick={() => go("dashboard")}>Abrir dashboard</button>}
                   <span style={{ flex: 1 }} />
                   <button className="ib" title="Editar" aria-label="Editar" onClick={() => setEdit(t)}><Pencil size={15} /></button>
-                  <button className="ib" title="Duplicar como modelo" aria-label="Duplicar" onClick={() => duplicate(t)}><Copy size={15} /></button>
-                  <button className="ib" title={arch ? "Restaurar" : "Arquivar"} aria-label={arch ? "Restaurar" : "Arquivar"} onClick={() => archive(t, !arch)}>{arch ? <ArchiveRestore size={15} /> : <Archive size={15} />}</button>
+                  <button className="ib" title="Duplicar como modelo" aria-label="Duplicar" onClick={() => guard("trips", activeCount) && duplicate(t)}><Copy size={15} /></button>
+                  <button className="ib" title={arch ? "Restaurar" : "Arquivar"} aria-label={arch ? "Restaurar" : "Arquivar"} onClick={() => (!arch || guard("trips", activeCount)) && archive(t, !arch)}>{arch ? <ArchiveRestore size={15} /> : <Archive size={15} />}</button>
                   <button className="ib dng" title="Excluir" aria-label="Excluir" onClick={() => del(t)}><Trash2 size={15} /></button>
                 </div>
               </div>
@@ -807,7 +877,7 @@ function ItemForm({ initial, onSave, onClose, locked }) {
     <Modal title={initial?.id ? "Editar item" : "Novo item do planejamento"} onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn pri" onClick={submit}><Check size={16} />Salvar item</button></>}>
       <div className="form">
         <Fld label="Descrição" err={e.description} full><Inp value={f.description} onChange={(v) => set("description", v)} autoFocus placeholder="Ex.: Seguro-viagem família" /></Fld>
-        <Fld label="Categoria"><Sel value={f.category} onChange={(v) => set("category", v)} opts={CATS} /></Fld>
+        <Fld label="Categoria"><CatSel value={f.category} onChange={(v) => set("category", v)} /></Fld>
         <Fld label="Responsável pelo pagamento"><Inp value={f.responsible} onChange={(v) => set("responsible", v)} /></Fld>
         <Fld label="Valor previsto" err={e.estimated} hint="Sua estimativa antes de contratar"><Money value={f.estimated} onChange={(v) => set("estimated", v)} /></Fld>
         <Fld label="Valor contratado" hint={locked ? "Definido pela proposta selecionada" : "Preencha quando fechar a compra"}><Money value={f.contracted} onChange={(v) => set("contracted", v)} disabled={locked} /></Fld>
@@ -841,6 +911,7 @@ function ScheduleModal({ item, paidSoFar, openCount, onClose, onConfirm }) {
 }
 
 function Planning({ s, trip, m, update, toast, ask, go }) {
+  const [calc, setCalc] = useState(null);
   const [edit, setEdit] = useState(null); const [sch, setSch] = useState(null); const [cat, setCat] = useState("");
   const [sort, setSort] = useState({ k: "category", d: 1 });
   const list = m.items.filter((i) => !cat || i.category === cat).slice().sort((a, b) => {
@@ -867,6 +938,21 @@ function Planning({ s, trip, m, update, toast, ask, go }) {
     });
     setSch(null); toast(o.already ? "Pagamento registrado" : "Parcelas geradas", "ok", { label: "Ver pagamentos", fn: () => go("pagamentos") });
   };
+  const applyCalc = (rows, inputs, field) => {
+    let added = 0, changed = 0;
+    update((st) => {
+      let items = st.items;
+      rows.forEach((r) => {
+        const notes = `Calculado: ${r.memo}`;
+        const ex = items.find((i) => i.tripId === trip.id && i.calcKey === r.key);
+        if (ex) { changed++; items = items.map((i) => (i.id === ex.id ? { ...i, description: r.description, category: r.category, estimated: r.value, notes } : i)); }
+        else { added++; items = [...items, { id: uid(), tripId: trip.id, calcKey: r.key, description: r.description, category: r.category, estimated: r.value, contracted: "", dueDate: "", method: "", responsible: "", notes, createdAt: new Date().toISOString() }]; }
+      });
+      return withLog({ ...st, items, trips: st.trips.map((t) => (t.id === trip.id ? { ...t, [field]: inputs } : t)) }, trip.id, `Estimativa de ${field === "carCalc" ? "carro" : "cruzeiro"} lançada: ${brl(sum(rows, (x) => x.value))}`);
+    });
+    setCalc(null);
+    setTimeout(() => toast(`${added ? `${added} item(ns) novo(s)` : ""}${added && changed ? " e " : ""}${changed ? `${changed} atualizado(s)` : ""} no planejamento`), 0);
+  };
   const catRows = Object.entries(m.byCat).filter(([, v]) => v.est || v.con || v.exp);
   const exp = () => downloadCSV(`planejamento-${slug(trip.name)}.csv`, ["Descrição", "Categoria", "Previsto", "Contratado", "Pago", "Desvio", "Data prevista", "Forma", "Responsável", "Observações"],
     list.map((i) => [i.description, i.category, brlPlain(i.estimated), brlPlain(i.contracted), brlPlain(m.paidByItem[i.id] || 0), num(i.contracted) != null && num(i.estimated) != null ? brlPlain(i.contracted - i.estimated) : "", fdate(i.dueDate), i.method, i.responsible, i.notes]));
@@ -884,7 +970,7 @@ function Planning({ s, trip, m, update, toast, ask, go }) {
       </div>
       <div className="row between">
         <div className="row"><Sel value={cat} onChange={setCat} opts={[["", "Todas as categorias"], ...CATS.map((c) => [c, c])]} style={{ width: 240 }} aria-label="Filtrar categoria" /></div>
-        <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo item</button></div>
+        <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="btn" onClick={() => setCalc("carro")}><Car size={15} />Custos de carro</button><button className="btn" onClick={() => setCalc("cruzeiro")}><Ship size={15} />Custos de cruzeiro</button><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo item</button></div>
       </div>
       {m.items.length === 0 ? <div className="card"><Empty icon={Wallet} title="Monte seu planejamento" text="Adicione as despesas que você espera ter: passagens, hospedagem, alimentação, passeios. Quando uma proposta for selecionada, ela entra aqui automaticamente."><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Adicionar primeiro item</button></Empty></div> : (
         <div className="tblwrap"><table className="tbl">
@@ -917,13 +1003,125 @@ function Planning({ s, trip, m, update, toast, ask, go }) {
           <p className="note" style={{ marginTop: 14 }}><Info size={14} />Barra clara: previsto. Barra escura: realizado. Vermelho indica que o realizado passou do previsto.</p>
         </div>)}
       {edit && <ItemForm initial={edit} locked={!!edit.bookingId} onSave={save} onClose={() => setEdit(null)} />}
+      {calc === "carro" && <CarCalc trip={trip} items={m.items} onClose={() => setCalc(null)} onApply={applyCalc} />}
+      {calc === "cruzeiro" && <CruiseCalc trip={trip} items={m.items} onClose={() => setCalc(null)} onApply={applyCalc} />}
       {sch && <ScheduleModal item={sch} paidSoFar={m.paidByItem[sch.id] || 0} openCount={s.payments.filter((p) => p.itemId === sch.id && !["pago", "cancelado"].includes(p.status)).length} onClose={() => setSch(null)} onConfirm={confirmSchedule} />}
     </div>
   );
 }
 
+// ---------- Calculadoras: viagem de carro e cruzeiro ----------
+// Geram itens PREVISTOS no planejamento, com a memória de cálculo nas observações.
+// Cada linha tem uma chave (calcKey): recalcular atualiza o item em vez de duplicar.
+const FUELS = ["Gasolina", "Etanol", "Diesel", "GNV"];
+const fmtN = (n, d = 0) => Number(n || 0).toLocaleString("pt-BR", { minimumFractionDigits: d, maximumFractionDigits: d });
+
+function CalcPreview({ rows, items }) {
+  if (!rows.length) return <p className="muted" style={{ margin: "14px 0 0", fontSize: 13 }}>Preencha os campos para ver a estimativa.</p>;
+  return (
+    <div className="tblwrap" style={{ marginTop: 16 }}><table className="tbl"><thead><tr><th>Item</th><th>Categoria</th><th>Cálculo</th><th className="r">Previsto</th><th></th></tr></thead>
+      <tbody>{rows.map((r) => { const ex = items.find((i) => i.calcKey === r.key); return <tr key={r.key}><td><b style={{ fontWeight: 600 }}>{r.description}</b></td><td>{r.category}</td><td className="muted" style={{ fontSize: 12.5 }}>{r.memo}</td><td className="r"><b>{brl(r.value)}</b></td><td>{ex ? <span className="badge b-orange">Atualiza</span> : <span className="badge b-green">Novo</span>}</td></tr>; })}</tbody>
+      <tfoot><tr><td colSpan={3}>Total estimado</td><td className="r">{brl(sum(rows, (r) => r.value))}</td><td /></tr></tfoot>
+    </table></div>
+  );
+}
+
+function CarCalc({ trip, items, onClose, onApply }) {
+  const d = tripDays(trip);
+  const [f, setF] = useState(() => ({ km: "", localKm: "", vehicles: 1, fuel: "Gasolina", cons: "", price: "", compare: false, fuel2: "Etanol", cons2: "", price2: "", tolls: "", rent: (trip.transport || []).includes("Carro alugado"), rentDays: d?.days || "", rentDaily: "", rentExtras: "", park: false, parkDays: d?.days || "", parkDaily: "", ...(trip.carCalc || {}) }));
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const veh = Math.max(1, num(f.vehicles) || 1);
+  const km = (num(f.km) || 0) + (num(f.localKm) || 0);
+  const fuelCost = km && num(f.cons) && num(f.price) ? r2((km / num(f.cons)) * num(f.price) * veh) : 0;
+  const fuelCost2 = f.compare && km && num(f.cons2) && num(f.price2) ? r2((km / num(f.cons2)) * num(f.price2) * veh) : 0;
+  const rows = [];
+  if (fuelCost) rows.push({ key: "carro:combustivel", category: "Combustível", value: fuelCost, description: `Combustível (${f.fuel.toLowerCase()}), ${fmtN(km)} km`, memo: `${fmtN(km)} km ÷ ${fmtN(num(f.cons), 1)} km/l × ${brl(num(f.price))}/l${veh > 1 ? ` × ${veh} veículos` : ""} = ${fmtN((km / num(f.cons)) * veh, 1)} litros` });
+  if (num(f.tolls)) rows.push({ key: "carro:pedagios", category: "Pedágios", value: r2(num(f.tolls) * veh), description: "Pedágios (ida e volta)", memo: `${brl(num(f.tolls))} por veículo${veh > 1 ? ` × ${veh} veículos` : ""}` });
+  if (f.rent && num(f.rentDays) && num(f.rentDaily)) rows.push({ key: "carro:aluguel", category: "Aluguel de carro", value: r2(num(f.rentDays) * num(f.rentDaily) + (num(f.rentExtras) || 0)), description: `Aluguel de carro, ${num(f.rentDays)} diária(s)`, memo: `${num(f.rentDays)} × ${brl(num(f.rentDaily))}${num(f.rentExtras) ? ` + ${brl(num(f.rentExtras))} de proteção e taxas` : ""}` });
+  if (f.park && num(f.parkDays) && num(f.parkDaily)) rows.push({ key: "carro:estacionamento", category: "Estacionamento e aeroporto", value: r2(num(f.parkDays) * num(f.parkDaily)), description: `Estacionamento, ${num(f.parkDays)} dia(s)`, memo: `${num(f.parkDays)} × ${brl(num(f.parkDaily))}` });
+  const perKm = (c, p) => (num(c) && num(p) ? num(p) / num(c) : null);
+  const k1 = perKm(f.cons, f.price), k2 = f.compare ? perKm(f.cons2, f.price2) : null;
+  return (
+    <Modal wide title="Custos da viagem de carro" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn pri" disabled={!rows.length} onClick={() => onApply(rows, f, "carCalc")}><Check size={16} />Lançar no planejamento</button></>}>
+      <div className="form form3">
+        <div className="sec">Trajeto e combustível</div>
+        <Fld label="Distância de ida e volta (km)" hint="Consulte no app de mapas"><Inp type="number" min="0" value={f.km} onChange={(v) => set("km", v)} placeholder="Ex.: 1200" /></Fld>
+        <Fld label="Deslocamentos no destino (km)" hint="Passeios e trajetos locais, se for usar o carro"><Inp type="number" min="0" value={f.localKm} onChange={(v) => set("localKm", v)} /></Fld>
+        <Fld label="Quantidade de veículos"><Inp type="number" min="1" value={f.vehicles} onChange={(v) => set("vehicles", v)} /></Fld>
+        <Fld label="Combustível"><Sel value={f.fuel} onChange={(v) => set("fuel", v)} opts={FUELS} /></Fld>
+        <Fld label="Consumo médio na estrada (km/l)"><Inp type="number" min="0" step="0.1" value={f.cons} onChange={(v) => set("cons", v)} placeholder="Ex.: 12,5" /></Fld>
+        <Fld label="Preço por litro"><Money value={f.price} onChange={(v) => set("price", v)} /></Fld>
+        <div className="full"><Toggle checked={f.compare} onChange={(v) => set("compare", v)} label="Comparar com outro combustível (ex.: etanol × gasolina)" /></div>
+        {f.compare && <>
+          <Fld label="Outro combustível"><Sel value={f.fuel2} onChange={(v) => set("fuel2", v)} opts={FUELS} /></Fld>
+          <Fld label="Consumo com ele (km/l)"><Inp type="number" min="0" step="0.1" value={f.cons2} onChange={(v) => set("cons2", v)} /></Fld>
+          <Fld label="Preço por litro"><Money value={f.price2} onChange={(v) => set("price2", v)} /></Fld>
+          {k1 != null && k2 != null && <div className="alert blue full" style={{ background: "#EAF7FB" }}><Info size={15} color="#167D9A" /><span>{f.fuel}: {brl(k1)} por km. {f.fuel2}: {brl(k2)} por km. {Math.abs(k1 - k2) < 0.005 ? "Os dois custam praticamente o mesmo." : `${k1 < k2 ? f.fuel : f.fuel2} sai ${brl(Math.abs(fuelCost - fuelCost2))} mais barato no trajeto todo.`}{k2 < k1 ? " Para lançar essa opção, troque o combustível principal." : ""}</span></div>}
+        </>}
+        <div className="sec">Pedágios</div>
+        <Fld label="Pedágios ida e volta, por veículo" hint="Calculadoras de rota mostram o total"><Money value={f.tolls} onChange={(v) => set("tolls", v)} /></Fld>
+        <div className="sec">Aluguel e estacionamento</div>
+        <div className="full row"><Toggle checked={f.rent} onChange={(v) => set("rent", v)} label="Vou alugar carro" /><Toggle checked={f.park} onChange={(v) => set("park", v)} label="Vou deixar o carro estacionado (ex.: aeroporto)" /></div>
+        {f.rent && <>
+          <Fld label="Diárias do aluguel"><Inp type="number" min="1" value={f.rentDays} onChange={(v) => set("rentDays", v)} /></Fld>
+          <Fld label="Valor da diária"><Money value={f.rentDaily} onChange={(v) => set("rentDaily", v)} /></Fld>
+          <Fld label="Proteção e taxas (total)" hint="Seguro, condutor adicional, taxa de devolução"><Money value={f.rentExtras} onChange={(v) => set("rentExtras", v)} /></Fld>
+        </>}
+        {f.park && <>
+          <Fld label="Dias de estacionamento"><Inp type="number" min="1" value={f.parkDays} onChange={(v) => set("parkDays", v)} /></Fld>
+          <Fld label="Valor da diária do estacionamento"><Money value={f.parkDaily} onChange={(v) => set("parkDaily", v)} /></Fld>
+        </>}
+      </div>
+      <CalcPreview rows={rows} items={items} />
+      <p className="note" style={{ marginTop: 10 }}><Info size={14} />Use o consumo do seu carro na estrada, não o da cidade. Os valores entram como previstos; registre os gastos reais em Despesas durante a viagem.</p>
+    </Modal>
+  );
+}
+
+function CruiseCalc({ trip, items, onClose, onApply }) {
+  const d = tripDays(trip); const tv = travelers(trip) || 1;
+  const [f, setF] = useState(() => ({ people: tv, nights: d?.nights || "", cabin: "", cabinMode: "total", portFee: "", serviceFee: "", servicePayers: tv, drinks: "", drinkPeople: "", drinkDays: d?.nights || "", wifi: "", wifiDays: d?.nights || "", excursions: "", toPort: "", ...(trip.cruiseCalc || {}) }));
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const P = num(f.people) || 0, N = num(f.nights) || 0;
+  const rows = [];
+  if (num(f.cabin)) { const v = f.cabinMode === "pessoa" ? r2(num(f.cabin) * P) : num(f.cabin); rows.push({ key: "cruzeiro:cabine", category: "Cruzeiro (cabine)", value: v, description: `Cruzeiro, ${N} noite(s)`, memo: f.cabinMode === "pessoa" ? `${brl(num(f.cabin))} por pessoa × ${P}` : "Valor total da cabine" }); }
+  if (num(f.portFee) && P) rows.push({ key: "cruzeiro:taxas", category: "Taxas portuárias", value: r2(num(f.portFee) * P), description: "Taxas portuárias", memo: `${brl(num(f.portFee))} por pessoa × ${P}` });
+  if (num(f.serviceFee) && N && num(f.servicePayers)) rows.push({ key: "cruzeiro:servico", category: "Taxa de serviço (gorjetas)", value: r2(num(f.serviceFee) * N * num(f.servicePayers)), description: "Taxa de serviço (gorjetas)", memo: `${brl(num(f.serviceFee))} por pessoa por noite × ${N} noites × ${num(f.servicePayers)} pessoa(s)` });
+  if (num(f.drinks) && num(f.drinkPeople) && num(f.drinkDays)) rows.push({ key: "cruzeiro:bebidas", category: "Pacotes a bordo", value: r2(num(f.drinks) * num(f.drinkPeople) * num(f.drinkDays)), description: "Pacote de bebidas", memo: `${brl(num(f.drinks))} por pessoa por dia × ${num(f.drinkPeople)} pessoa(s) × ${num(f.drinkDays)} dia(s)` });
+  if (num(f.wifi) && num(f.wifiDays)) rows.push({ key: "cruzeiro:internet", category: "Pacotes a bordo", value: r2(num(f.wifi) * num(f.wifiDays)), description: "Internet a bordo", memo: `${brl(num(f.wifi))} por dia × ${num(f.wifiDays)} dia(s)` });
+  if (num(f.excursions)) rows.push({ key: "cruzeiro:excursoes", category: "Excursões em terra", value: num(f.excursions), description: "Excursões nas escalas", memo: "Estimativa total informada" });
+  if (num(f.toPort)) rows.push({ key: "cruzeiro:porto", category: "Transporte local", value: num(f.toPort), description: "Deslocamento até o porto (ida e volta)", memo: "Estimativa total informada" });
+  const contracted = items.some((i) => i.bookingId && ["Cruzeiro (cabine)", "Pacotes turísticos"].includes(i.category));
+  return (
+    <Modal wide title="Custos do cruzeiro" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn pri" disabled={!rows.length} onClick={() => onApply(rows, f, "cruiseCalc")}><Check size={16} />Lançar no planejamento</button></>}>
+      <div className="form form3">
+        <div className="sec">Cabine</div>
+        <Fld label="Pessoas na viagem"><Inp type="number" min="1" value={f.people} onChange={(v) => set("people", v)} /></Fld>
+        <Fld label="Noites a bordo"><Inp type="number" min="1" value={f.nights} onChange={(v) => set("nights", v)} /></Fld>
+        <Fld label="Valor da cabine" hint={contracted ? "Já existe uma proposta selecionada. Deixe em branco para não contar duas vezes." : "Opcional se o valor veio de uma cotação"}><div className="row" style={{ flexWrap: "nowrap", gap: 6 }}><Money value={f.cabin} onChange={(v) => set("cabin", v)} /><select className="sel" style={{ width: 120 }} value={f.cabinMode} onChange={(e) => set("cabinMode", e.target.value)} aria-label="Valor total ou por pessoa"><option value="total">total</option><option value="pessoa">por pessoa</option></select></div></Fld>
+        <div className="sec">Taxas obrigatórias</div>
+        <Fld label="Taxas portuárias, por pessoa"><Money value={f.portFee} onChange={(v) => set("portFee", v)} /></Fld>
+        <Fld label="Taxa de serviço, por pessoa por noite" hint="Também chamada de gorjeta ou service charge"><Money value={f.serviceFee} onChange={(v) => set("serviceFee", v)} /></Fld>
+        <Fld label="Pessoas que pagam a taxa de serviço" hint="Algumas companhias isentam ou reduzem para crianças"><Inp type="number" min="0" value={f.servicePayers} onChange={(v) => set("servicePayers", v)} /></Fld>
+        <div className="sec">Pacotes a bordo</div>
+        <Fld label="Pacote de bebidas, por pessoa por dia"><Money value={f.drinks} onChange={(v) => set("drinks", v)} /></Fld>
+        <Fld label="Pessoas com pacote de bebidas"><Inp type="number" min="0" value={f.drinkPeople} onChange={(v) => set("drinkPeople", v)} /></Fld>
+        <Fld label="Dias do pacote de bebidas"><Inp type="number" min="0" value={f.drinkDays} onChange={(v) => set("drinkDays", v)} /></Fld>
+        <Fld label="Internet a bordo, por dia"><Money value={f.wifi} onChange={(v) => set("wifi", v)} /></Fld>
+        <Fld label="Dias de internet"><Inp type="number" min="0" value={f.wifiDays} onChange={(v) => set("wifiDays", v)} /></Fld>
+        <div />
+        <div className="sec">Escalas e deslocamento</div>
+        <Fld label="Excursões em terra (total)" hint="Passeios nas paradas do roteiro"><Money value={f.excursions} onChange={(v) => set("excursions", v)} /></Fld>
+        <Fld label="Ida e volta até o porto (total)" hint="Transfer, combustível ou passagem até o porto"><Money value={f.toPort} onChange={(v) => set("toPort", v)} /></Fld>
+      </div>
+      <CalcPreview rows={rows} items={items} />
+      <p className="note" style={{ marginTop: 10 }}><Info size={14} />Taxas e regras variam por companhia, roteiro e idade dos passageiros. Confira na proposta se taxas portuárias e de serviço já estão incluídas, para não lançar em dobro.</p>
+    </Modal>
+  );
+}
+
 // ---------- Cotações ----------
-const QFIELDS_MONEY = [["airfare", "Passagens aéreas"], ["boardingFees", "Taxas de embarque"], ["hotelValue", "Hospedagem"], ["transfersValue", "Traslados"], ["insuranceValue", "Seguro-viagem"], ["otherFees", "Taxas adicionais"]];
+const QFIELDS_MONEY = [["airfare", "Passagens aéreas"], ["boardingFees", "Taxas de embarque"], ["hotelValue", "Hospedagem"], ["transfersValue", "Traslados"], ["insuranceValue", "Seguro-viagem"], ["carRental", "Aluguel de carro"], ["portFees", "Taxas portuárias"], ["serviceFees", "Taxa de serviço (gorjetas)"], ["otherFees", "Taxas adicionais"]];
 function QuoteForm({ initial, trip, onSave, onClose }) {
   const [f, setF] = useState(() => ({ agency: "", consultant: "", phone: "", email: "", site: "", date: todayISO(), validUntil: "", code: "", link: "", serviceNotes: "", total: "", people: travelers(trip) || "", entry: "", installments: "", installmentValue: "", interest: "", discount: "", airline: "", originAirport: "", destAirport: "", flightDates: "", connections: "", flightDuration: "", baggage: "", flightRules: "", hotel: "", hotelStars: "", roomType: "", meal: "", nights: tripDays(trip)?.nights ?? "", locationRating: "", hotelLocation: "", hotelCancel: "", transfers: "", insurance: "", toursInc: "", toursText: "", notIncluded: "", restrictions: "", cancel: "", rating: "", status: "aberta", favorite: false, ...initial }));
   const [tab, setTab] = useState("empresa"); const [e, setE] = useState({});
@@ -1045,7 +1243,7 @@ function SelectQuoteModal({ q, trip, m, onClose, onConfirm }) {
           <Fld label="Lançar no planejamento como" full hint={o.itemId ? `Previsto de ${brl(linkedEst)}; desvio será ${brl(total - linkedEst)}` : "Será criado um item novo com o valor contratado"}>
             <Sel value={o.itemId} onChange={(v) => setO({ ...o, itemId: v })} opts={[["", "Novo item"], ...linkable.map((i) => [i.id, `Vincular a: ${i.description} (${brl(i.estimated)})`])]} />
           </Fld>
-          {!o.itemId && <Fld label="Categoria do item" full><Sel value={o.category} onChange={(v) => setO({ ...o, category: v })} opts={CATS} /></Fld>}
+          {!o.itemId && <Fld label="Categoria do item" full><CatSel value={o.category} onChange={(v) => setO({ ...o, category: v })} /></Fld>}
           <Fld label="Nº do contrato"><Inp value={o.contractNo} onChange={(v) => setO({ ...o, contractNo: v })} /></Fld>
           <Fld label="Dados de confirmação"><Inp value={o.confirmation} onChange={(v) => setO({ ...o, confirmation: v })} placeholder="Localizador, voucher…" /></Fld>
           <div className="full"><Toggle checked={o.generate} onChange={(v) => setO({ ...o, generate: v })} label="Gerar cronograma de pagamentos" /></div>
@@ -1062,7 +1260,7 @@ function SelectQuoteModal({ q, trip, m, onClose, onConfirm }) {
   );
 }
 
-function WeightsPanel({ weights, onChange }) {
+function WeightsPanel({ weights, onChange, locked, onLocked }) {
   const total = CRIT.reduce((a, c) => a + (Number(weights[c.k]) || 0), 0);
   const normalize = () => {
     if (!total) return onChange({ ...DEFAULT_WEIGHTS });
@@ -1075,19 +1273,20 @@ function WeightsPanel({ weights, onChange }) {
       <div className="grid" style={{ gap: 12 }}>
         {CRIT.map((c) => (
           <div key={c.k} style={{ display: "grid", gridTemplateColumns: "1fr 64px", gap: 10, alignItems: "center" }}>
-            <div><div className="row between" style={{ fontSize: 13, marginBottom: 2 }}><span>{c.l}</span></div><input type="range" min="0" max="100" step="5" value={weights[c.k] || 0} aria-label={`Peso de ${c.l}`} onChange={(e) => onChange({ ...weights, [c.k]: Number(e.target.value) })} /></div>
-            <input className="inp" style={{ padding: "6px 8px", textAlign: "right" }} type="number" min="0" max="100" value={weights[c.k] || 0} aria-label={`Peso de ${c.l} em %`} onChange={(e) => onChange({ ...weights, [c.k]: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })} />
+            <div><div className="row between" style={{ fontSize: 13, marginBottom: 2 }}><span>{c.l}</span></div><input type="range" disabled={locked} min="0" max="100" step="5" value={weights[c.k] || 0} aria-label={`Peso de ${c.l}`} onChange={(e) => onChange({ ...weights, [c.k]: Number(e.target.value) })} /></div>
+            <input className="inp" style={{ padding: "6px 8px", textAlign: "right" }} type="number" disabled={locked} min="0" max="100" value={weights[c.k] || 0} aria-label={`Peso de ${c.l} em %`} onChange={(e) => onChange({ ...weights, [c.k]: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })} />
           </div>))}
       </div>
-      <div className="row" style={{ marginTop: 14 }}>
+      {locked && <button className="alert orange" style={{ marginTop: 14 }} onClick={onLocked}><Lock size={15} color="#E8A23A" /><span style={{ flex: 1 }}>No plano Gratuito o ranking usa os pesos padrão. Toque para liberar os pesos personalizados.</span></button>}
+      {!locked && <div className="row" style={{ marginTop: 14 }}>
         {total !== 100 && <button className="btn sm pri" onClick={normalize}>Ajustar proporcionalmente para 100%</button>}
         <button className="btn sm" onClick={() => onChange({ ...DEFAULT_WEIGHTS })}>Restaurar padrão</button>
-      </div>
+      </div>}
     </div>
   );
 }
 
-function Compare({ trip, m, ranked, weights, setWeights, onSelect }) {
+function Compare({ trip, m, ranked, weights, setWeights, onSelect, locked, onLocked }) {
   const [open, setOpen] = useState(null);
   const total = CRIT.reduce((a, c) => a + (Number(weights[c.k]) || 0), 0);
   const rows = ranked.filter((r) => num(r.q.total) > 0);
@@ -1116,7 +1315,7 @@ function Compare({ trip, m, ranked, weights, setWeights, onSelect }) {
     <div className="grid" style={{ gridTemplateColumns: "minmax(0,1fr)" }}>
       <div className="grid" style={{ gridTemplateColumns: "minmax(260px,340px) minmax(0,1fr)", alignItems: "start" }}>
         <div className="grid">
-          <WeightsPanel weights={weights} onChange={setWeights} />
+          <WeightsPanel weights={weights} onChange={setWeights} locked={locked} onLocked={onLocked} />
           <div className="card" style={{ background: "#FAFCFC" }}><h3><Info size={15} />Como a pontuação é calculada</h3>
             <p style={{ margin: 0, fontSize: 13, color: "#2F5566" }}>Cada critério recebe uma nota de 0 a 100. Valores em dinheiro e parcelas são normalizados entre a menor e a maior proposta, para não comparar grandezas diferentes. A nota final é a média ponderada pelos seus pesos.</p>
             <p style={{ margin: "10px 0 0", fontSize: 13, color: "#2F5566" }}>Quando um critério não foi informado, ele é excluído daquela proposta e os pesos restantes são redistribuídos. A <b>cobertura</b> mostra quanto do peso total pôde ser avaliado: compare com cautela propostas com cobertura baixa.</p>
@@ -1160,7 +1359,7 @@ function Compare({ trip, m, ranked, weights, setWeights, onSelect }) {
   );
 }
 
-function QuotesPage({ s, trip, m, update, toast, ask, go }) {
+function QuotesPage({ s, trip, m, update, toast, ask, go, plan, guard = () => true }) {
   const [tab, setTab] = useState("lista"); const [edit, setEdit] = useState(null); const [view, setView] = useState(null); const [sel, setSel] = useState(null);
   const [q, setQ] = useState(""); const [flt, setFlt] = useState("todas"); const [sort, setSort] = useState("score");
   const weights = { ...DEFAULT_WEIGHTS, ...(trip.weights || {}) };
@@ -1223,11 +1422,11 @@ function QuotesPage({ s, trip, m, update, toast, ask, go }) {
     <div className="grid">
       <div className="row between">
         <div className="tabs"><button className={tab === "lista" ? "on" : ""} onClick={() => setTab("lista")}>Cotações ({m.quotes.length})</button><button className={tab === "comp" ? "on" : ""} onClick={() => setTab("comp")}>Comparativo</button></div>
-        <button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Nova cotação</button>
+        <button className="btn pri" onClick={() => guard("quotes", m.quotes.length) && setEdit({})}><Plus size={16} />Nova cotação</button>
       </div>
       {m.booking && <div className="alert blue" style={{ background: "#EAF7FB" }}><Award size={16} color="#167D9A" /><span style={{ flex: 1 }}>Proposta selecionada: <b>{m.bookedQuote?.agency}</b>, {brl(m.booking.total)}{m.booking.contractNo ? `, contrato ${m.booking.contractNo}` : ""}. As demais cotações continuam disponíveis para consulta.</span><button className="btn sm" onClick={cancelSel}>Cancelar seleção</button></div>}
-      {tab === "comp" ? <Compare trip={trip} m={m} ranked={ranked} weights={weights} setWeights={setWeights} onSelect={setSel} /> : m.quotes.length === 0 ? (
-        <div className="card"><Empty icon={FileText} title="Nenhuma cotação ainda" text="Registre as propostas de cada agência com valores, parcelas, voo, hotel e serviços. Com duas ou mais, o comparativo de custo-benefício fica disponível."><button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Cadastrar cotação</button></Empty></div>
+      {tab === "comp" ? <Compare trip={trip} m={m} ranked={ranked} weights={weights} setWeights={setWeights} onSelect={setSel} locked={plan?.limits ? !plan.limits.can_edit_weights : false} onLocked={() => guard("weights")} /> : m.quotes.length === 0 ? (
+        <div className="card"><Empty icon={FileText} title="Nenhuma cotação ainda" text="Registre as propostas de cada agência com valores, parcelas, voo, hotel e serviços. Com duas ou mais, o comparativo de custo-benefício fica disponível."><button className="btn pri" onClick={() => guard("quotes", m.quotes.length) && setEdit({})}><Plus size={16} />Cadastrar cotação</button></Empty></div>
       ) : (<>
         <div className="row">
           <div className="searchbox" style={{ width: 260 }}><Search size={15} /><input className="inp" placeholder="Buscar empresa, hotel, cia" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Buscar cotações" /></div>
@@ -1249,7 +1448,7 @@ function QuotesPage({ s, trip, m, update, toast, ask, go }) {
                 {!isSel && num(x.total) > 0 && <button className="btn sm" onClick={() => setSel(x)}>Selecionar</button>}
                 <button className="ib" aria-label="Ver detalhes" onClick={() => setView(x)}><Eye size={15} /></button>
                 <button className="ib" aria-label="Editar" onClick={() => setEdit(x)}><Pencil size={15} /></button>
-                <button className="ib" aria-label="Duplicar" onClick={() => dup(x)}><Copy size={15} /></button>
+                <button className="ib" aria-label="Duplicar" onClick={() => guard("quotes", m.quotes.length) && dup(x)}><Copy size={15} /></button>
                 <button className="ib dng" aria-label="Excluir" onClick={() => del(x)}><Trash2 size={15} /></button>
               </td></tr>; })}
             {!list.length && <tr><td colSpan={9} className="muted" style={{ textAlign: "center", padding: 28 }}>Nenhuma cotação com esses filtros.</td></tr>}
@@ -1272,7 +1471,7 @@ function PaymentForm({ initial, items, onSave, onClose }) {
       <div className="form">
         <Fld label="Descrição" err={e.description} full><Inp value={f.description} onChange={(v) => set("description", v)} autoFocus /></Fld>
         <Fld label="Item do planejamento" full hint="Vincule para que o pago apareça no item. Sem vínculo, o valor não entra no saldo a pagar dos contratos."><Sel value={f.itemId} onChange={(v) => { const it = items.find((i) => i.id === v); setF((p) => ({ ...p, itemId: v, category: it ? it.category : p.category })); }} opts={[["", "Sem vínculo"], ...items.map((i) => [i.id, `${i.description} (${i.category})`])]} /></Fld>
-        <Fld label="Categoria"><Sel value={f.category} onChange={(v) => set("category", v)} opts={CATS} /></Fld>
+        <Fld label="Categoria"><CatSel value={f.category} onChange={(v) => set("category", v)} /></Fld>
         <Fld label="Fornecedor"><Inp value={f.supplier} onChange={(v) => set("supplier", v)} /></Fld>
         <Fld label="Valor" err={e.amount}><Money value={f.amount} onChange={(v) => set("amount", v)} /></Fld>
         <Fld label="Forma de pagamento"><Sel value={f.method} onChange={(v) => set("method", v)} opts={METHODS} /></Fld>
@@ -1364,36 +1563,61 @@ function PayCalendar({ pays, month, setMonth, onPick }) {
 }
 
 // ---------- Roteiro ----------
-const ITIN_ICON = { restaurante: Utensils, passeio: Ticket, praia: Umbrella, atracao: Landmark, deslocamento: Car, hospedagem: Building2, outro: MapPin };
+const ITIN_ICON = { escala: Anchor, restaurante: Utensils, passeio: Ticket, praia: Umbrella, atracao: Landmark, deslocamento: Car, hospedagem: Building2, outro: MapPin };
 
-function BenefitPicker({ programs, value, onChange, onPaid, paid, paidLabel = "valor" }) {
+function BenefitPicker({ programs, value, onChange, onPaid, paid, paidLabel = "valor", date }) {
   const clubs = programs.filter((p) => (p.rules || []).length);
   const v = value || null;
   const ro = ruleOf(programs, v);
+  const cardsFor = (p) => Math.max(1, activeMemberships(p, date).length);
   const res = ro?.r ? applyRule(ro.r, v) : null;
   const saved = res ? (res.paid != null ? r2(res.full - res.paid) : num(paid) != null ? r2(res.full - num(paid)) : null) : null;
   const upd = (patch) => {
     let nv = { ...(v || {}), ...patch };
-    const rr = ruleOf(programs, nv); const out = rr?.r ? applyRule(rr.r, nv) : null;
+    const rr = ruleOf(programs, nv);
+    if (rr?.r?.kind === "2x1") {
+      if (!Array.isArray(nv.items)) nv.items = [nv.a ?? "", nv.b ?? ""];
+      delete nv.a; delete nv.b;
+      const filled = nv.items.filter((x) => num(x) > 0).length;
+      const maxUses = Math.max(1, Math.min(cardsFor(rr.p), Math.floor(filled / 2)));
+      nv.uses = nv.usesAuto === false ? Math.min(num(nv.uses) || 1, maxUses) : maxUses;
+    }
+    const out = rr?.r ? applyRule(rr.r, nv) : null;
     if (rr?.r?.kind === "2x1") nv = { ...nv, full: out ? out.full : "" };
     onChange(nv); if (out && out.paid != null) onPaid(out.paid);
   };
   if (!clubs.length) return <div className="note full"><Gift size={14} />Cadastre um clube de benefícios em “Benefícios e fidelidade” para calcular a economia aqui.</div>;
   const opts = [["", "Nenhum benefício"], ...clubs.flatMap((p) => p.rules.map((r) => [`${p.id}|${r.id}`, `${p.name}: ${r.label}`]))];
+  const items = v ? (Array.isArray(v.items) ? v.items : [v.a ?? "", v.b ?? ""]) : [];
+  const filled = items.filter((x) => num(x) > 0).length;
+  const cards = ro ? cardsFor(ro.p) : 1;
+  const maxSel = Math.max(1, Math.min(cards, Math.floor(filled / 2)));
   return (
     <div className="benefit">
       <Fld label="Benefício utilizado"><Sel value={v ? `${v.programId}|${v.ruleId}` : ""} onChange={(x) => { if (!x) { onChange(null); return; } const [programId, ruleId] = x.split("|"); upd({ programId, ruleId }); }} opts={opts} /></Fld>
       {ro?.r && (ro.r.kind === "2x1" ? (
-        <div className="form" style={{ marginTop: 10 }}>
-          <Fld label="Valor do 1º item" hint="Ex.: prato, diária ou ingresso"><Money value={v.a} onChange={(x) => upd({ a: x })} /></Fld>
-          <Fld label="Valor do 2º item"><Money value={v.b} onChange={(x) => upd({ b: x })} /></Fld>
+        <div style={{ marginTop: 10 }}>
+          <div className="kl" style={{ marginBottom: 6 }}>Valor de cada item (prato, diária ou ingresso)</div>
+          <div className="items-grid">{items.map((x, i) => (
+            <div key={i} className="row" style={{ flexWrap: "nowrap", gap: 4 }}>
+              <Money value={x} onChange={(val) => { const it = [...items]; it[i] = val; upd({ items: it }); }} aria-label={`Item ${i + 1}`} />
+              {items.length > 2 && <button className="ib dng" aria-label="Remover item" onClick={() => upd({ items: items.filter((_, j) => j !== i) })}><X size={14} /></button>}
+            </div>))}</div>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn sm" onClick={() => upd({ items: [...items, ""] })}><Plus size={13} />Adicionar item</button>
+            <label className="row" style={{ gap: 6, fontSize: 13 }}>Adesões usadas
+              <select className="sel" style={{ width: 70, padding: "5px 8px" }} value={Math.min(num(v.uses) || 1, maxSel)} onChange={(e) => upd({ uses: Number(e.target.value), usesAuto: false })}>{Array.from({ length: maxSel }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}</select>
+            </label>
+            <span className="muted" style={{ fontSize: 12 }}>{cards} adesão(ões) válida(s){date ? ` em ${fdate(date)}` : ""}</span>
+          </div>
         </div>
       ) : (
         <div className="form" style={{ marginTop: 10 }}>
           <Fld label="Valor sem o benefício" hint={ro.r.kind === "other" ? `Informe no campo de ${paidLabel} quanto foi pago de fato` : ro.r.kind === "pct" ? `Desconto de ${ro.r.value || 0}%` : `Desconto de ${brl(ro.r.value || 0)}`}><Money value={v.full} onChange={(x) => upd({ full: x })} /></Fld>
         </div>
       ))}
-      {res && <div className="note" style={{ marginTop: 8, color: "var(--green)" }}><CheckCircle2 size={14} />Sem o benefício: {brl(res.full)}.{res.paid != null ? ` Com ele: ${brl(res.paid)}.` : ""}{saved != null && saved > 0 ? ` Economia de ${brl(saved)}.` : ""}</div>}
+      {res && <div className="note" style={{ marginTop: 8, color: "var(--green)" }}><CheckCircle2 size={14} /><span>{res.pairs != null ? `${res.pairs} par(es) com benefício${res.unpaired ? `, ${res.unpaired} item(ns) pago(s) integralmente` : ""}. ` : ""}Sem o benefício: {brl(res.full)}.{res.paid != null ? ` Com ele: ${brl(res.paid)}.` : ""}{saved != null && saved > 0 ? ` Economia de ${brl(saved)}.` : ""}</span></div>}
+      {ro?.r?.kind === "2x1" && (num(v.uses) || 1) > 1 && <div className="note" style={{ marginTop: 6 }}><Info size={14} />Confirme no app do clube quantos usos o estabelecimento aceita por mesa.</div>}
       {ro && !ro.r && <div className="note" style={{ marginTop: 8 }}><AlertTriangle size={14} />A regra escolhida não existe mais no programa.</div>}
     </div>
   );
@@ -1415,7 +1639,7 @@ function ItinForm({ initial, trip, programs, onSave, onClose }) {
         <Fld label="Cidade ou região"><Inp value={f.city} onChange={(v) => set("city", v)} /></Fld>
         <Fld label="Local"><Inp value={f.place} onChange={(v) => set("place", v)} /></Fld>
         <Fld label="Endereço ou link do mapa" full><Inp value={f.link} onChange={(v) => set("link", v)} placeholder="https://" /></Fld>
-        <BenefitPicker programs={programs} value={f.benefit} onChange={(b) => set("benefit", b)} onPaid={(v) => set("estimated", v)} paid={f.estimated} paidLabel="valor estimado" />
+        <BenefitPicker date={f.date} programs={programs} value={f.benefit} onChange={(b) => set("benefit", b)} onPaid={(v) => set("estimated", v)} paid={f.estimated} paidLabel="valor estimado" />
         <Fld label="Valor estimado" hint={f.benefit ? "Já com o benefício aplicado" : ""}><Money value={f.estimated} onChange={(v) => set("estimated", v)} /></Fld>
         <Fld label="Valor realizado" hint="Informativo. Use “Registrar gasto” para entrar nos totais."><Money value={f.real} onChange={(v) => set("real", v)} /></Fld>
         <Fld label="Participantes"><Inp value={f.participants} onChange={(v) => set("participants", v)} /></Fld>
@@ -1539,7 +1763,8 @@ function ItineraryPage({ s, trip, update, toast, ask }) {
 
 // ---------- Despesas ----------
 const QUICK = ["Alimentação", "Transporte local", "Passeios e excursões", "Compras e lembranças", "Ingressos", "Outras despesas"];
-const QUICK_L = { "Alimentação": "Alimentação", "Transporte local": "Transporte", "Passeios e excursões": "Passeios", "Compras e lembranças": "Compras", "Ingressos": "Ingressos", "Outras despesas": "Outros" };
+const quickFor = (t) => { const tr = t.transport || []; const extra = []; if (tr.some((x) => x.startsWith("Carro"))) extra.push("Combustível", "Pedágios"); if (tr.includes("Cruzeiro")) extra.push("Pacotes a bordo", "Excursões em terra"); return [...QUICK.slice(0, 4), ...extra, ...QUICK.slice(4)]; };
+const QUICK_L = { "Combustível": "Combustível", "Pedágios": "Pedágio", "Pacotes a bordo": "A bordo", "Excursões em terra": "Excursões", "Alimentação": "Alimentação", "Transporte local": "Transporte", "Passeios e excursões": "Passeios", "Compras e lembranças": "Compras", "Ingressos": "Ingressos", "Outras despesas": "Outros" };
 
 function ExpenseForm({ initial, trip, programs = [], title, onSave, onClose }) {
   const people = peopleOf(trip);
@@ -1567,10 +1792,10 @@ function ExpenseForm({ initial, trip, programs = [], title, onSave, onClose }) {
     <Modal title={title || (initial?.id ? "Detalhes da despesa" : "Nova despesa")} onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn pri" onClick={submit}><Check size={16} />Salvar despesa</button></>}>
       <div className="form">
         <Fld label="Descrição" full><Inp value={f.description} onChange={(v) => set("description", v)} /></Fld>
-        <BenefitPicker programs={programs} value={f.benefit} onChange={(b) => set("benefit", b)} onPaid={(v) => set("amount", v)} paid={f.amount} paidLabel="valor" />
+        <BenefitPicker date={f.date} programs={programs} value={f.benefit} onChange={(b) => set("benefit", b)} onPaid={(v) => set("amount", v)} paid={f.amount} paidLabel="valor" />
         <Fld label={f.benefit ? "Valor pago (com benefício)" : "Valor"} err={e.amount}><Money value={f.amount} onChange={(v) => set("amount", v)} /></Fld>
         <Fld label="Data" err={e.date}><Inp type="date" value={f.date} onChange={(v) => set("date", v)} /></Fld>
-        <Fld label="Categoria"><Sel value={f.category} onChange={(v) => set("category", v)} opts={CATS} /></Fld>
+        <Fld label="Categoria"><CatSel value={f.category} onChange={(v) => set("category", v)} /></Fld>
         <Fld label="Forma de pagamento"><Sel value={f.method} onChange={(v) => set("method", v)} opts={METHODS} /></Fld>
         <Fld label="Situação" hint="Compra no crédito: marque como Realizada. A fatura não é lançada de novo."><Sel value={f.status} onChange={(v) => set("status", v)} opts={EXP_STATUS} /></Fld>
         <Fld label="Quem pagou"><Sel value={f.person} onChange={(v) => set("person", v)} opts={[["", "Não informado"], ...people.map((p) => [p, p])]} /></Fld>
@@ -1641,7 +1866,7 @@ function ExpensesPage({ s, trip, m, update, toast, ask }) {
       <div className="grid g2" style={{ alignItems: "start" }}>
         <div className="qa">
           <div className="row between" style={{ marginBottom: 12 }}><b style={{ fontSize: 15 }}>Lançamento rápido</b><span style={{ fontSize: 12.5, color: "#A7C5CF" }}>Hoje: {brl(todayTotal)}</span></div>
-          <div className="row" style={{ gap: 6, marginBottom: 12 }}>{QUICK.map((c) => <button key={c} className={`chip ${qa.cat === c ? "on" : ""}`} onClick={() => setQa({ ...qa, cat: c })}>{QUICK_L[c]}</button>)}</div>
+          <div className="row" style={{ gap: 6, marginBottom: 12 }}>{quickFor(trip).map((c) => <button key={c} className={`chip ${qa.cat === c ? "on" : ""}`} onClick={() => setQa({ ...qa, cat: c })}>{QUICK_L[c]}</button>)}</div>
           <Money className="amount" value={qa.amount} onChange={(v) => setQa({ ...qa, amount: v })} ref={amtRef} aria-label="Valor da despesa" onKeyDown={(e) => e.key === "Enter" && add()} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
             <input className="inp" placeholder="Descrição (opcional)" value={qa.desc} onChange={(e) => setQa({ ...qa, desc: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} aria-label="Descrição" />
@@ -1685,7 +1910,7 @@ function ExpensesPage({ s, trip, m, update, toast, ask }) {
 // ---------- Benefícios e fidelidade ----------
 const PROGRAM_TEMPLATES = {
   prime: {
-    name: "Prime Gourmet", type: "clube", partner: "Clube de benefícios 2x1", costModel: "anual", fee: "",
+    name: "Prime Gourmet", type: "clube", partner: "Clube de benefícios 2x1", costModel: "anual", fee: "", memberships: [{ holder: "", fee: "", startDate: "", endDate: "" }],
     cities: "", link: "", conditions: "Confirme no app, antes de ir, se o estabelecimento participa e em quais dias e horários o benefício vale.",
     notes: "Modelo criado pelo app. Ajuste o valor pago e as regras conforme o seu plano.",
     rules: [
@@ -1705,20 +1930,26 @@ const PROGRAM_TEMPLATES = {
   },
 };
 
-function ProgramForm({ initial, onSave, onClose }) {
-  const [f, setF] = useState(() => ({ name: "", type: "clube", partner: "", costModel: "gratis", fee: "", startDate: "", endDate: "", cities: "", link: "", conditions: "", notes: "", pointsBalance: "", pointsUpdated: "", pointsExpiry: "", refPerThousand: "", refPremise: "", ...initial, rules: (initial?.rules || []).map((r) => ({ id: r.id || uid(), ...r })) }));
+function ProgramForm({ initial, onSave, onClose, maxMemberships = null, onLimit }) {
+  const [f, setF] = useState(() => ({ name: "", type: "clube", partner: "", costModel: "gratis", fee: "", startDate: "", endDate: "", cities: "", link: "", conditions: "", notes: "", pointsBalance: "", pointsUpdated: "", pointsExpiry: "", refPerThousand: "", refPremise: "", ...initial, rules: (initial?.rules || []).map((r) => ({ id: r.id || uid(), ...r })), memberships: initial?.id || initial?.memberships?.length ? membershipsOf(initial || {}).map((x) => ({ holder: "", fee: "", startDate: "", endDate: "", ...x, id: x.id && x.id !== "m0" ? x.id : uid() })) : [{ id: uid(), holder: "", fee: initial?.fee ?? "", startDate: "", endDate: "" }] }));
+  const setMem = (id, patch) => set("memberships", f.memberships.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  const addMem = () => { if (maxMemberships != null && f.memberships.length >= maxMemberships) { onLimit?.(); return; } set("memberships", [...f.memberships, { id: uid(), holder: "", fee: f.memberships[0]?.fee ?? "", startDate: f.memberships[0]?.startDate || "", endDate: f.memberships[0]?.endDate || "" }]); };
   const [e, setE] = useState({}); const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const setRule = (id, patch) => set("rules", f.rules.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const isPts = f.type === "milhas" || f.type === "cartao";
   const submit = () => {
     const x = {};
     if (!f.name.trim()) x.name = "Informe o nome do programa.";
-    if (f.costModel !== "gratis" && !(num(f.fee) > 0)) x.fee = "Informe o valor que você paga (ou marque como gratuito).";
-    if (f.startDate && f.endDate && f.endDate < f.startDate) x.endDate = "O fim da vigência é anterior ao início.";
+    if (!f.memberships.length) x.mem = "Cadastre pelo menos uma adesão.";
+    else if (f.costModel !== "gratis" && f.memberships.some((m) => !(num(m.fee) > 0))) x.mem = "Informe o valor de cada adesão (ou marque o custo como gratuito).";
+    else if (f.memberships.some((m) => m.startDate && m.endDate && m.endDate < m.startDate)) x.mem = "Há uma adesão com fim de vigência anterior ao início.";
     if (f.rules.some((r) => !r.label.trim())) x.rules = "Dê um nome a cada benefício.";
     if (f.rules.some((r) => r.kind === "pct" && !(num(r.value) > 0 && num(r.value) <= 100))) x.rules = "O desconto percentual precisa estar entre 1% e 100%.";
     if (num(f.refPerThousand) != null && !f.refPremise.trim()) x.refPremise = "Explique de onde vem esse valor (ex.: preço médio de compra de milhas).";
-    setE(x); if (!Object.keys(x).length) onSave({ ...f, fee: f.costModel === "gratis" ? 0 : r2(f.fee) });
+    if (Object.keys(x).length) { setE(x); return; }
+    const mem = f.memberships.map((m) => ({ ...m, holder: String(m.holder || "").trim(), fee: f.costModel === "gratis" ? 0 : r2(m.fee) }));
+    const starts = mem.map((m) => m.startDate).filter(Boolean).sort(), ends = mem.map((m) => m.endDate).filter(Boolean).sort();
+    setE({}); onSave({ ...f, memberships: mem, fee: sum(mem, (m) => m.fee), startDate: mem.every((m) => m.startDate) ? starts[0] : "", endDate: mem.every((m) => m.endDate) ? ends[ends.length - 1] : "" });
   };
   return (
     <Modal wide title={initial?.id ? "Editar programa" : "Novo programa de benefícios"} onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn pri" onClick={submit}><Check size={16} />Salvar programa</button></>}>
@@ -1728,11 +1959,22 @@ function ProgramForm({ initial, onSave, onClose }) {
         <Fld label="Tipo"><Sel value={f.type} onChange={(v) => set("type", v)} opts={PROG_TYPES} /></Fld>
         <Fld label="Parceiro ou emissor"><Inp value={f.partner} onChange={(v) => set("partner", v)} placeholder="Companhia aérea, banco, clube" /></Fld>
         <Fld label="Custo"><Sel value={f.costModel} onChange={(v) => set("costModel", v)} opts={COST_MODELS} /></Fld>
-        {f.costModel !== "gratis" && <Fld label={f.costModel === "mensal" ? "Valor mensal" : f.costModel === "anual" ? "Valor da anuidade" : "Valor pago"} err={e.fee} hint={f.name.toLowerCase().includes("prime") ? "Você comentou uma média de R$ 150 a R$ 200 por ano" : ""}><Money value={f.fee} onChange={(v) => set("fee", v)} /></Fld>}
-        <Fld label="Vigência: início"><Inp type="date" value={f.startDate} onChange={(v) => set("startDate", v)} /></Fld>
-        <Fld label="Vigência: fim" err={e.endDate} hint="A economia é contada só dentro da vigência"><Inp type="date" value={f.endDate} onChange={(v) => set("endDate", v)} /></Fld>
         <Fld label="Cidades atendidas" hint="Separadas por vírgula. Usado para avisar se o destino consta."><Inp value={f.cities} onChange={(v) => set("cities", v)} /></Fld>
         <Fld label="Site ou app"><Inp value={f.link} onChange={(v) => set("link", v)} placeholder="https://" /></Fld>
+        <div className="sec">Adesões {e.mem && <span style={{ color: "#B33A36", fontWeight: 500, marginLeft: 8 }}>{e.mem}</span>}</div>
+        <div className="full grid" style={{ gap: 8 }}>
+          <div className="memrow memhead hide-m"><span>Titular</span><span>{f.costModel === "gratis" ? "" : f.costModel === "mensal" ? "Valor mensal" : f.costModel === "anual" ? "Anuidade" : "Valor pago"}</span><span>Início</span><span>Fim</span><span /></div>
+          {f.memberships.map((m, i) => (
+            <div key={m.id} className="memrow">
+              <input className="inp" placeholder={`Titular ${i + 1} (ex.: Alex)`} value={m.holder || ""} onChange={(ev) => setMem(m.id, { holder: ev.target.value })} aria-label="Titular da adesão" />
+              {f.costModel === "gratis" ? <span className="muted" style={{ fontSize: 12.5, alignSelf: "center" }}>Gratuita</span> : <Money value={m.fee} onChange={(v) => setMem(m.id, { fee: v })} aria-label="Valor da adesão" />}
+              <input className="inp" type="date" value={m.startDate || ""} onChange={(ev) => setMem(m.id, { startDate: ev.target.value })} aria-label="Início da vigência" />
+              <input className="inp" type="date" value={m.endDate || ""} onChange={(ev) => setMem(m.id, { endDate: ev.target.value })} aria-label="Fim da vigência" />
+              <button className="ib dng" aria-label="Remover adesão" disabled={f.memberships.length === 1} onClick={() => set("memberships", f.memberships.filter((x) => x.id !== m.id))}><Trash2 size={15} /></button>
+            </div>))}
+          <div className="row"><button className="btn sm" onClick={addMem}>{maxMemberships != null && f.memberships.length >= maxMemberships ? <Lock size={13} /> : <Plus size={14} />}Adicionar adesão</button>
+            <span className="muted" style={{ fontSize: 12.5 }}>{f.memberships.length > 1 ? `${f.memberships.length} adesões${f.costModel !== "gratis" ? `, total ${brl(sum(f.memberships, (m) => m.fee))}` : ""}. ` : ""}Em clubes “compre 1, leve 2”, cada adesão cobre um par de pessoas na mesma conta.{f.name.toLowerCase().includes("prime") ? " Você comentou uma média de R$ 150 a R$ 200 por ano." : ""}</span></div>
+        </div>
         <div className="sec">Benefícios {e.rules && <span style={{ color: "#B33A36", fontWeight: 500, marginLeft: 8 }}>{e.rules}</span>}</div>
         <div className="full grid" style={{ gap: 8 }}>
           {f.rules.map((r) => (
@@ -1764,7 +2006,7 @@ function ProgramForm({ initial, onSave, onClose }) {
 }
 
 function AllocModal({ p, trip, existing, onClose, onConfirm }) {
-  const d = tripDays(trip); const fee = num(p.fee) || 0;
+  const d = tripDays(trip); const fee = feeOf(p);
   const full = p.costModel === "mensal" ? r2(fee * 12) : fee;
   const prop = p.costModel === "mensal" ? r2(fee * Math.max(1, Math.ceil((d?.days || 1) / 30))) : d ? r2((fee * d.days) / 365) : null;
   const [mode, setMode] = useState(prop != null ? "prop" : "full"); const [manual, setManual] = useState("");
@@ -1800,14 +2042,15 @@ function ProgramCard({ s, p, trip, onEdit, onDel, onAlloc }) {
   const avgUse = all.uses ? all.realized / all.uses : null;
   const usesLeft = avgUse && all.left > 0 ? Math.ceil(all.left / avgUse) : null;
   const paidModel = p.costModel !== "gratis";
-  const expired = p.endDate && p.endDate < todayISO();
+  const mems = membershipsOf(p);
+  const expired = mems.every((x) => x.endDate && x.endDate < todayISO());
   return (
     <div className="card prog-card">
       <div className="row between" style={{ alignItems: "flex-start" }}>
         <div style={{ minWidth: 0 }}>
-          <div className="row" style={{ gap: 6 }}><span className="badge b-sand">{PROG_LABEL[p.type]}</span><span className={`badge ${paidModel ? "" : "b-green"}`}>{paidModel ? `${brl(p.fee)}${p.costModel === "mensal" ? "/mês" : p.costModel === "anual" ? "/ano" : ""}` : "Gratuito"}</span>{expired && <span className="badge b-red">Vigência encerrada</span>}</div>
+          <div className="row" style={{ gap: 6 }}><span className="badge b-sand">{PROG_LABEL[p.type]}</span><span className={`badge ${paidModel ? "" : "b-green"}`}>{paidModel ? `${brl(feeOf(p))}${p.costModel === "mensal" ? "/mês" : p.costModel === "anual" ? "/ano" : ""}` : "Gratuito"}</span>{mems.length > 1 && <span className="badge b-blue">{mems.length} adesões</span>}{expired && <span className="badge b-red">Vigência encerrada</span>}</div>
           <h3 className="serif" style={{ fontSize: 20, fontWeight: 400, margin: "10px 0 2px" }}>{p.name}</h3>
-          <div className="muted" style={{ fontSize: 12.5 }}>{p.partner}{p.startDate || p.endDate ? `${p.partner ? ". " : ""}Vigência ${fdate(p.startDate)} a ${fdate(p.endDate)}` : ""}</div>
+          <div className="muted" style={{ fontSize: 12.5 }}>{p.partner}{mems.length > 1 ? `${p.partner ? ". " : ""}Titulares: ${mems.map((x, i) => x.holder || `adesão ${i + 1}`).join(", ")}` : p.startDate || p.endDate ? `${p.partner ? ". " : ""}Vigência ${fdate(p.startDate)} a ${fdate(p.endDate)}` : ""}</div>
         </div>
         <div className="row" style={{ gap: 2, flexWrap: "nowrap" }}>
           {p.link && <a className="ib" href={p.link} target="_blank" rel="noreferrer" aria-label="Abrir site"><ExternalLink size={15} /></a>}
@@ -1871,7 +2114,7 @@ function RedemptionSim({ programs, trip, onSave }) {
   );
 }
 
-function BenefitsPage({ s, trip, m, update, toast, ask }) {
+function BenefitsPage({ s, trip, m, update, toast, ask, plan, guard = () => true }) {
   const programs = s.programs || [];
   const [tab, setTab] = useState("programas"); const [edit, setEdit] = useState(null); const [alloc, setAlloc] = useState(null);
   const save = (f) => {
@@ -1904,15 +2147,15 @@ function BenefitsPage({ s, trip, m, update, toast, ask }) {
       <div className="row between">
         <div className="tabs"><button className={tab === "programas" ? "on" : ""} onClick={() => setTab("programas")}>Clubes e programas ({programs.length})</button><button className={tab === "pontos" ? "on" : ""} onClick={() => setTab("pontos")}>Pontos e milhas</button></div>
         <div className="row">
-          {!hasTpl("prime") && <button className="btn" onClick={() => setEdit({ ...PROGRAM_TEMPLATES.prime })}><Gift size={15} />Prime Gourmet</button>}
-          {!hasTpl("role") && <button className="btn" onClick={() => setEdit({ ...PROGRAM_TEMPLATES.role })}><Gift size={15} />Clube do Rolê</button>}
-          <button className="btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo programa</button>
+          {!hasTpl("prime") && <button className="btn" onClick={() => guard("programs", programs.length) && setEdit({ ...PROGRAM_TEMPLATES.prime })}><Gift size={15} />Prime Gourmet</button>}
+          {!hasTpl("role") && <button className="btn" onClick={() => guard("programs", programs.length) && setEdit({ ...PROGRAM_TEMPLATES.role })}><Gift size={15} />Clube do Rolê</button>}
+          <button className="btn pri" onClick={() => guard("programs", programs.length) && setEdit({})}><Plus size={16} />Novo programa</button>
         </div>
       </div>
       {tab === "programas" ? (programs.length === 0 ? (
         <div className="card"><Empty icon={Gift} title="Seus clubes de desconto e programas de pontos" text="Cadastre clubes como o Prime Gourmet e o Clube do Rolê, escolha o benefício ao planejar um restaurante ou passeio, e acompanhe quanto cada programa já economizou e se a anuidade se pagou.">
-          <button className="btn pri" onClick={() => setEdit({ ...PROGRAM_TEMPLATES.prime })}><Gift size={16} />Começar pelo Prime Gourmet</button>
-          <button className="btn" onClick={() => setEdit({ ...PROGRAM_TEMPLATES.role })}>Começar pelo Clube do Rolê</button>
+          <button className="btn pri" onClick={() => guard("programs", programs.length) && setEdit({ ...PROGRAM_TEMPLATES.prime })}><Gift size={16} />Começar pelo Prime Gourmet</button>
+          <button className="btn" onClick={() => guard("programs", programs.length) && setEdit({ ...PROGRAM_TEMPLATES.role })}>Começar pelo Clube do Rolê</button>
         </Empty></div>
       ) : <>
         <div className="strip" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))" }}>
@@ -1937,7 +2180,7 @@ function BenefitsPage({ s, trip, m, update, toast, ask }) {
           </div>
         </>}
       </>)}
-      {edit && <ProgramForm initial={edit} onSave={save} onClose={() => setEdit(null)} />}
+      {edit && <ProgramForm initial={edit} onSave={save} onClose={() => setEdit(null)} maxMemberships={plan?.limits?.max_memberships_per_program ?? null} onLimit={() => guard("memberships", 1e9)} />}
       {alloc && <AllocModal p={alloc} trip={trip} existing={s.items.find((i) => i.tripId === trip.id && i.programId === alloc.id)} onClose={() => setAlloc(null)} onConfirm={doAlloc} />}
     </div>
   );
@@ -2037,7 +2280,7 @@ const IMPORT_FIELDS = {
   despesas: [["date", "Data", ["data", "date"]], ["description", "Descrição", ["descri", "item", "historico"]], ["category", "Categoria", ["categ"]], ["amount", "Valor", ["valor", "amount", "total"]], ["method", "Forma de pagamento", ["forma", "metodo", "pagamento"]], ["status", "Situação", ["situa", "status"]], ["person", "Quem pagou", ["quem", "pagou", "pessoa"]], ["place", "Local", ["local", "estabelec"]], ["notes", "Observação", ["observ", "nota"]]],
   itens: [["description", "Descrição", ["descri", "item"]], ["category", "Categoria", ["categ"]], ["estimated", "Previsto", ["previsto", "estimado", "valor"]], ["contracted", "Contratado", ["contratado"]], ["dueDate", "Data prevista", ["data prevista", "vencimento", "data"]], ["method", "Forma", ["forma"]], ["responsible", "Responsável", ["respons"]], ["notes", "Observações", ["observ"]]],
 };
-function ImportCSV({ s, trip, update, toast }) {
+function ImportCSV({ s, trip, update, toast, guard = () => true, locked }) {
   const [target, setTarget] = useState("despesas"); const [data, setData] = useState(null); const [map, setMap] = useState({}); const ref = useRef(null);
   const guess = (headers, tg) => { const out = {}; const used = new Set(); IMPORT_FIELDS[tg].forEach(([k, , keys]) => { const idx = headers.findIndex((h, i) => !used.has(i) && keys.some((kw) => normTxt(h).includes(kw))); if (idx >= 0) { out[k] = idx; used.add(idx); } }); return out; };
   const onFile = (e) => { const f = e.target.files?.[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { const p = parseCSV(String(rd.result)); if (!p.headers.length) { toast("O arquivo está vazio ou não é um CSV", "err"); return; } setData({ ...p, name: f.name }); setMap(guess(p.headers, target)); }; rd.readAsText(f, "utf-8"); e.target.value = ""; };
@@ -2076,7 +2319,7 @@ function ImportCSV({ s, trip, update, toast }) {
       {!trip ? <p className="muted" style={{ margin: 0, fontSize: 13 }}>Crie ou selecione uma viagem para importar.</p> : <>
         <div className="row" style={{ marginBottom: 10 }}>
           <Sel value={target} onChange={changeTarget} style={{ width: 230 }} aria-label="Tipo de importação" opts={[["despesas", "Despesas da viagem"], ["itens", "Itens do planejamento"]]} />
-          <button className="btn" onClick={() => ref.current?.click()}><Upload size={15} />Escolher arquivo</button>
+          <button className="btn" onClick={() => guard("import") && ref.current?.click()}>{locked ? <Lock size={15} /> : <Upload size={15} />}Escolher arquivo</button>{locked && <span className="badge b-sand">Viajante e Família</span>}
           <input ref={ref} type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={onFile} />
         </div>
         <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Aceita ponto e vírgula ou vírgula, valores como 1.250,00 e datas DD/MM/AAAA. Os CSVs exportados pelo próprio app podem ser reimportados. Linhas idênticas às já existentes são ignoradas.</p>
@@ -2093,7 +2336,7 @@ function ImportCSV({ s, trip, update, toast }) {
 }
 
 // ---------- Configurações ----------
-function ConfigPage({ s, trip, m, update, toast, ask, loadDemo, persist, storeMode, account, onSignOut }) {
+function ConfigPage({ s, trip, m, update, toast, ask, loadDemo, persist, storeMode, account, onSignOut, plan, guard }) {
   const fileRef = useRef(null);
   const hasDemo = s.trips.some((t) => t.demo);
   const removeDemo = () => ask({ title: "Remover dados de demonstração", danger: true, cta: "Remover demonstração", message: "A viagem de demonstração e tudo o que foi lançado nela serão excluídos. Suas viagens reais e seus programas de benefícios não são afetados.", onConfirm: () => { update((st) => { const ids = new Set(st.trips.filter((t) => t.demo).map((t) => t.id)); const k = (x) => !ids.has(x.tripId); return withLog({ ...st, trips: st.trips.filter((t) => !t.demo), items: st.items.filter(k), quotes: st.quotes.filter(k), bookings: st.bookings.filter(k), payments: st.payments.filter(k), expenses: st.expenses.filter(k), itinerary: st.itinerary.filter(k), redemptions: (st.redemptions || []).filter(k), docs: (st.docs || []).filter(k), log: (st.log || []).filter(k), activeTripId: ids.has(st.activeTripId) ? null : st.activeTripId }, null, "Demonstração removida"); }); toast("Dados de demonstração removidos"); } });
@@ -2118,7 +2361,7 @@ function ConfigPage({ s, trip, m, update, toast, ask, loadDemo, persist, storeMo
     <div className="grid g2" style={{ alignItems: "start" }}>
       <div className="grid">
         <div className="card"><h3><Database size={16} />Armazenamento e conta</h3><p style={{ margin: "0 0 10px" }}><span className={`badge ${persist === "saved" ? "b-green" : persist === "memory" ? "b-red" : "b-orange"}`}>{persist === "saved" ? (storeMode === "cloud" ? "Sincronizado" : "Salvo") : persist === "memory" ? (storeMode === "cloud" ? "Falha na sincronização" : "Somente sessão") : "Salvando…"}</span></p><p className="muted" style={{ margin: 0, fontSize: 13 }}>{storeText}</p>{onSignOut && <div className="row" style={{ marginTop: 12 }}><button className="btn" onClick={onSignOut}>Sair da conta</button></div>}</div>
-        <ImportCSV s={s} trip={trip} update={update} toast={toast} />
+        <ImportCSV s={s} trip={trip} update={update} toast={toast} guard={guard} locked={plan?.limits ? !plan.limits.can_import_csv : false} />
         <div className="card"><h3>Backup e exportação</h3>
           <div className="grid" style={{ gap: 8 }}>
             <button className="btn" onClick={backup}><Download size={15} />Exportar backup completo (JSON)</button>
@@ -2137,6 +2380,137 @@ function ConfigPage({ s, trip, m, update, toast, ask, loadDemo, persist, storeMo
           {logs.length ? <div className="grid" style={{ gap: 0 }}>{logs.map((l) => <div key={l.id} style={{ display: "grid", gridTemplateColumns: "92px 1fr", gap: 10, fontSize: 13, padding: "8px 0", borderTop: "1px solid #EFF4F5" }}><span className="muted">{fdate(l.at.slice(0, 10))} {l.at.slice(11, 16)}</span><span>{l.text}</span></div>)}</div> : <p className="muted" style={{ margin: 0, fontSize: 13 }}>As alterações financeiras relevantes aparecem aqui.</p>}
         </div>
         <div className="card" style={{ background: "#FAFCFC" }}><h3>Privacidade</h3><p className="muted" style={{ margin: 0, fontSize: 13 }}>O aplicativo não solicita nem armazena números de cartão, senhas bancárias ou credenciais de programas de fidelidade. Registre apenas a forma de pagamento e o saldo de pontos.</p></div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Planos e assinaturas ----------
+const LIMITS = {
+  trips: { key: "max_active_trips", title: "Mais de uma viagem ativa", text: (n) => `O plano Gratuito mantém ${n} viagem ativa por vez. Para planejar outra, arquive uma viagem concluída ou assine o Viajante ou o Família.` },
+  quotes: { key: "max_quotes_per_trip", title: "Mais cotações nesta viagem", text: (n) => `O plano Gratuito compara até ${n} cotações por viagem. Nos planos pagos você cadastra quantas propostas quiser.` },
+  programs: { key: "max_programs", title: "Mais clubes e programas", text: (n) => `O plano Gratuito inclui ${n} clube ou programa de benefícios. Assine para acompanhar todos os seus clubes, pontos e milhas.` },
+  memberships: { key: "max_memberships_per_program", title: "Mais adesões no mesmo clube", text: (n) => `O plano Gratuito permite ${n} adesão por clube. Para registrar os cartões de outros viajantes, como várias adesões do Prime Gourmet na mesma mesa, assine o Viajante ou o Família.` },
+  weights: { flag: "can_edit_weights", title: "Comparativo personalizado", text: () => "No plano Gratuito o ranking usa os pesos padrão. Assine para ajustar o peso de preço, hospedagem, voo e serviços conforme o que importa para você." },
+  import: { flag: "can_import_csv", title: "Importação de planilhas", text: () => "A importação de CSV está disponível nos planos Viajante e Família. A exportação e o backup continuam livres em todos os planos." },
+};
+const LIMIT_CODES = { LIMITE_VIAGENS: "trips", LIMITE_COTACOES: "quotes", LIMITE_PROGRAMAS: "programs", LIMITE_ADESOES: "memberships" };
+const PLAN_COPY = {
+  free: { name: "Gratuito", tag: "Para conhecer", desc: "Uma viagem completa, do orçamento ao balanço final." },
+  viajante: { name: "Viajante", tag: "Para quem viaja sempre", desc: "Viagens e cotações sem limite, com o comparativo do seu jeito." },
+  familia: { name: "Família", tag: "Mais completo", desc: "Tudo do Viajante, com a viagem compartilhada com quem vai junto." },
+};
+const REF_PRICES = { viajante_mensal: 7.9, viajante_anual: 79, familia_mensal: 12.9, familia_anual: 129 };
+const trialDaysLeft = (p) => (p?.trial_ends_at ? Math.max(0, Math.ceil((new Date(p.trial_ends_at).getTime() - Date.now()) / 86400000)) : 0);
+const isoDay = (ts) => (ts ? String(ts).slice(0, 10) : "");
+function planChip(p) {
+  const d = trialDaysLeft(p);
+  if (p.status === "past_due") return "Pagamento pendente";
+  if (d > 0 && !["active", "pago_unico"].includes(p.status)) return `Teste Família: ${d} dia${d === 1 ? "" : "s"}`;
+  return `Plano ${PLAN_COPY[p.plan]?.name || p.plan}`;
+}
+function planFeatures(l) {
+  return [
+    [l.max_active_trips == null ? "Viagens ativas ilimitadas" : `${l.max_active_trips} viagem ativa por vez`, true],
+    ["Histórico de viagens arquivadas", true],
+    [l.max_quotes_per_trip == null ? "Cotações ilimitadas por viagem" : `Até ${l.max_quotes_per_trip} cotações por viagem`, true],
+    ["Comparativo com pesos personalizados", !!l.can_edit_weights],
+    [l.max_programs == null ? "Clubes, pontos e milhas ilimitados" : `${l.max_programs} clube ou programa de benefícios`, true],
+    [l.max_memberships_per_program == null ? "Várias adesões por clube" : `${l.max_memberships_per_program} adesão por clube`, true],
+    ["Importação de planilhas CSV", !!l.can_import_csv],
+    [l.max_members_per_trip ? `Viagem compartilhada com até ${l.max_members_per_trip} pessoas (em breve)` : "Viagem compartilhada em família", !!l.max_members_per_trip],
+    ["Exportação CSV e backup completo", true],
+  ];
+}
+
+function UpgradeModal({ kind, plan, onClose, go }) {
+  const info = LIMITS[kind] || {}; const n = plan?.limits?.[info.key];
+  const d = trialDaysLeft(plan);
+  return (
+    <Modal title={info.title || "Recurso dos planos pagos"} onClose={onClose} footer={<><button className="btn" onClick={onClose}>Agora não</button><button className="btn pri" onClick={() => { onClose(); go("planos"); }}><Crown size={16} />Ver planos</button></>}>
+      <p style={{ marginTop: 0 }}>{info.text ? info.text(n) : ""}</p>
+      <p className="muted" style={{ margin: 0, fontSize: 13 }}>Nada do que você já cadastrou é apagado ou bloqueado para leitura.{d > 0 ? "" : " Todas as contas novas começam com 14 dias do plano Família, sem cartão."}</p>
+    </Modal>
+  );
+}
+
+function PlansPage({ plan, refreshPlan, storeMode, toast }) {
+  const [cycle, setCycle] = useState("year");
+  const [prices, setPrices] = useState(null); const [priceErr, setPriceErr] = useState(false);
+  const [busy, setBusy] = useState("");
+  useEffect(() => {
+    if (storeMode !== "cloud") return;
+    api("prices").then((r) => setPrices(r.prices || {})).catch(() => setPriceErr(true));
+  }, [storeMode]);
+  if (storeMode !== "cloud") return <div className="card"><Empty icon={Crown} title="Planos disponíveis na versão em nuvem" text="Esta instalação salva apenas no navegador. Configure o Supabase e o Stripe (veja o README) para ativar contas, planos e o teste grátis." /></div>;
+  if (!plan) return <div className="card"><Empty icon={Crown} title="Carregando seu plano…" text="Se demorar, confira se o script supabase/002_planos_stripe.sql foi executado no Supabase."><button className="btn" onClick={refreshPlan}>Tentar de novo</button></Empty></div>;
+
+  const catalog = (plan.catalog || []).reduce((a, l) => ({ ...a, [l.plan]: l }), {});
+  const d = trialDaysLeft(plan);
+  const sub = ["active", "trialing", "past_due"].includes(plan.status);
+  const pago = plan.status === "pago_unico";
+  const priceOf = (k) => (prices?.[k]?.amount != null ? prices[k].amount : REF_PRICES[k]);
+  const go = async (body, key) => {
+    setBusy(key);
+    try { const r = await api(body.portal ? "portal" : "checkout", body.portal ? {} : body); window.location.href = r.url; }
+    catch (e) { toast(e.message || "Não foi possível abrir o pagamento.", "err"); setBusy(""); }
+  };
+  let status = null;
+  if (plan.status === "past_due") status = ["red", `O último pagamento não foi aprovado. Atualize a forma de pagamento até ${fdate(isoDay(new Date(new Date(plan.current_period_end || Date.now()).getTime() + 7 * 86400000).toISOString()))} para não voltar ao plano Gratuito.`];
+  else if (sub && plan.cancel_at_period_end) status = ["orange", `Assinatura cancelada. O plano ${PLAN_COPY[plan.paid_plan]?.name} continua ativo até ${fdate(isoDay(plan.current_period_end))} e depois sua conta passa para o Gratuito, sem perder dados.`];
+  else if (sub) status = ["blue", `Plano ${PLAN_COPY[plan.paid_plan]?.name} ${plan.interval === "year" ? "anual" : "mensal"}${plan.status === "trialing" && d > 0 ? `. A primeira cobrança será em ${fdate(isoDay(plan.trial_ends_at))}, quando seu teste terminar.` : plan.current_period_end ? `, renova em ${fdate(isoDay(plan.current_period_end))}.` : "."}`];
+  else if (pago) status = ["blue", `Plano ${PLAN_COPY[plan.paid_plan]?.name} pago com Pix, válido até ${fdate(isoDay(plan.current_period_end))}. Não há renovação automática: renove quando quiser.`];
+  else if (d > 0) status = ["blue", `Você está no teste gratuito do plano Família: ${d} dia${d === 1 ? "" : "s"} restante${d === 1 ? "" : "s"}, até ${fdate(isoDay(plan.trial_ends_at))}. Sem cartão, sem cobrança automática.`];
+  else status = ["", "Você está no plano Gratuito. Assine quando quiser: seus dados continuam todos aqui."];
+
+  return (
+    <div className="grid">
+      <div className={`alert ${status[0]}`} style={{ alignItems: "center" }}>
+        <Crown size={16} color="#167D9A" /><span style={{ flex: 1 }}>{status[1]}</span>
+        {plan.has_customer && (sub || pago) && <button className="btn sm" disabled={!!busy} onClick={() => go({ portal: true }, "portal")}>{busy === "portal" ? "Abrindo…" : "Gerenciar assinatura"}</button>}
+      </div>
+      <div className="row" style={{ justifyContent: "center" }}>
+        <div className="tabs"><button className={cycle === "month" ? "on" : ""} onClick={() => setCycle("month")}>Mensal</button><button className={cycle === "year" ? "on" : ""} onClick={() => setCycle("year")}>Anual <span className="badge b-green" style={{ marginLeft: 4 }}>2 meses grátis</span></button></div>
+      </div>
+      <div className="grid g3 plans">
+        {["free", "viajante", "familia"].map((k) => {
+          const l = catalog[k] || {}; const copy = PLAN_COPY[k];
+          const key = k === "free" ? null : `${k}_${cycle === "year" ? "anual" : "mensal"}`;
+          const price = key ? priceOf(key) : 0;
+          const current = plan.plan === k && (k === "free" ? !sub && !pago && d === 0 : true);
+          const paidCurrent = (sub || pago) && plan.paid_plan === k;
+          const featured = k === "familia";
+          let cta = null;
+          if (k === "free") cta = <button className="btn" disabled style={{ width: "100%", justifyContent: "center" }}>{current ? "Plano atual" : "Incluído para todos"}</button>;
+          else if (paidCurrent && (pago || plan.interval === cycle)) cta = <button className="btn" disabled style={{ width: "100%", justifyContent: "center" }}><Check size={15} />Seu plano</button>;
+          else if (sub) cta = <button className={`btn ${featured ? "pri" : ""}`} disabled={!!busy} style={{ width: "100%", justifyContent: "center" }} onClick={() => go({ portal: true }, k)}>{busy === k ? "Abrindo…" : paidCurrent ? `Mudar para ${cycle === "year" ? "anual" : "mensal"}` : `Mudar para ${copy.name}`}</button>;
+          else cta = <button className={`btn ${featured ? "pri" : ""}`} disabled={!!busy} style={{ width: "100%", justifyContent: "center", padding: "11px 14px" }} onClick={() => go({ lookupKey: key }, k)}>{busy === k ? "Abrindo pagamento…" : d > 0 ? `Assinar ${copy.name}` : `Assinar ${copy.name}`}</button>;
+          return (
+            <div key={k} className={`card plan ${featured ? "featured" : ""} ${current || paidCurrent ? "current" : ""}`}>
+              <div className="row between"><span className={`badge ${featured ? "b-green" : "b-sand"}`}>{copy.tag}</span>{(current || paidCurrent) && <span className="badge b-blue">Atual</span>}</div>
+              <h3 className="serif" style={{ fontSize: 24, fontWeight: 400, margin: "14px 0 4px" }}>{copy.name}</h3>
+              <p className="muted" style={{ margin: 0, fontSize: 13, minHeight: 38 }}>{copy.desc}</p>
+              <div className="price">
+                {k === "free" ? <><b className="serif">R$ 0</b><span>para sempre</span></> : <><b className="serif">{brl(price)}</b><span>/{cycle === "year" ? "ano" : "mês"}</span></>}
+              </div>
+              <div className="muted" style={{ fontSize: 12.5, minHeight: 18 }}>{k !== "free" && cycle === "year" ? `Equivale a ${brl(price / 12)} por mês` : k !== "free" ? `${brl(priceOf(`${k}_anual`))} no plano anual` : ""}</div>
+              <div style={{ margin: "16px 0" }}>{cta}</div>
+              {k !== "free" && cycle === "year" && !sub && !paidCurrent && <button className="pixlink" disabled={!!busy} onClick={() => go({ lookupKey: key, pix: true }, `${k}-pix`)}>{busy === `${k}-pix` ? "Abrindo…" : "Prefere Pix? Pague 12 meses de uma vez"}</button>}
+              <ul className="feat">{planFeatures(l).map(([t, ok]) => <li key={t} className={ok ? "" : "off"}>{ok ? <Check size={15} /> : <X size={15} />}<span>{t}</span></li>)}</ul>
+            </div>
+          );
+        })}
+      </div>
+      {priceErr && <p className="note" style={{ justifyContent: "center" }}><Info size={14} />Não foi possível consultar os preços no Stripe agora. Os valores exibidos são de referência; o valor cobrado aparece na página de pagamento.</p>}
+      <div className="card faq">
+        <h3>Perguntas frequentes</h3>
+        <div className="grid g2" style={{ gap: 18 }}>
+          <div><b>Como funciona o teste grátis?</b><p>Toda conta nova tem 14 dias do plano Família, sem cartão. Ao fim, a conta passa para o Gratuito, sem cobrança. Se assinar durante o teste, a primeira cobrança só acontece quando ele terminar.</p></div>
+          <div><b>Posso cancelar quando quiser?</b><p>Sim, em “Gerenciar assinatura”. O plano continua até o fim do período já pago e depois a conta volta para o Gratuito.</p></div>
+          <div><b>O que acontece com meus dados se eu cancelar?</b><p>Nada é apagado. O que passar do limite do Gratuito fica disponível para consulta, e você pode exportar tudo a qualquer momento.</p></div>
+          <div><b>Quais formas de pagamento?</b><p>Cartão de crédito Visa ou Mastercard e boleto, com renovação automática. No plano anual também há Pix, pago de uma vez e sem renovação automática.</p></div>
+        </div>
+        <p className="note" style={{ marginTop: 14 }}><Lock size={14} />O pagamento acontece na página segura do Stripe. O Férias Planejadas não recebe nem armazena dados de cartão.</p>
       </div>
     </div>
   );
