@@ -1004,10 +1004,10 @@ function Planning({ s, trip, m, update, toast, ask, go, canPlan = true }) {
       rows.forEach((r) => {
         const notes = `Calculado: ${r.memo}`;
         const ex = items.find((i) => i.tripId === trip.id && i.calcKey === r.key);
-        if (ex) { changed++; items = items.map((i) => (i.id === ex.id ? { ...i, description: r.description, category: r.category, estimated: r.value, notes } : i)); }
-        else { added++; items = [...items, { id: uid(), tripId: trip.id, calcKey: r.key, description: r.description, category: r.category, estimated: r.value, contracted: "", dueDate: "", method: "", responsible: "", notes, createdAt: new Date().toISOString() }]; }
+        if (ex) { changed++; items = items.map((i) => (i.id === ex.id ? { ...i, description: r.description, category: r.category, estimated: r.value, notes, plannedSaving: r.saving || null, benefitName: r.benefitName || null } : i)); }
+        else { added++; items = [...items, { id: uid(), tripId: trip.id, calcKey: r.key, description: r.description, category: r.category, estimated: r.value, plannedSaving: r.saving || null, benefitName: r.benefitName || null, contracted: "", dueDate: "", method: "", responsible: "", notes, createdAt: new Date().toISOString() }]; }
       });
-      return withLog({ ...st, items, trips: st.trips.map((t) => (t.id === trip.id ? { ...t, [field]: inputs } : t)) }, trip.id, `Estimativa de ${field === "carCalc" ? "carro" : "cruzeiro"} lançada: ${brl(sum(rows, (x) => x.value))}`);
+      return withLog({ ...st, items, trips: st.trips.map((t) => (t.id === trip.id ? { ...t, [field]: inputs } : t)) }, trip.id, `Estimativa de ${{ carCalc: "carro", cruiseCalc: "cruzeiro", foodCalc: "alimentação" }[field]} lançada: ${brl(sum(rows, (x) => x.value))}`);
     });
     setCalc(null);
     setTimeout(() => toast(`${added ? `${added} item(ns) novo(s)` : ""}${added && changed ? " e " : ""}${changed ? `${changed} atualizado(s)` : ""} no planejamento`), 0);
@@ -1029,7 +1029,7 @@ function Planning({ s, trip, m, update, toast, ask, go, canPlan = true }) {
       </div>
       <div className="row between">
         <div className="row"><Sel value={cat} onChange={setCat} opts={[["", "Todas as categorias"], ...CATS.map((c) => [c, c])]} style={{ width: 240 }} aria-label="Filtrar categoria" /></div>
-        <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="act btn" onClick={() => setCalc("carro")}><Car size={15} />Custos de carro</button><button className="act btn" onClick={() => setCalc("cruzeiro")}><Ship size={15} />Custos de cruzeiro</button><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo item</button></div>
+        <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="act btn" onClick={() => setCalc("alimentacao")}><Utensils size={15} />Alimentação</button><button className="act btn" onClick={() => setCalc("carro")}><Car size={15} />Custos de carro</button><button className="act btn" onClick={() => setCalc("cruzeiro")}><Ship size={15} />Custos de cruzeiro</button><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Novo item</button></div>
       </div>
       {m.items.length === 0 ? <div className="card"><Empty icon={Wallet} title="Monte seu planejamento" text="Adicione as despesas que você espera ter: passagens, hospedagem, alimentação, passeios. Quando uma proposta for selecionada, ela entra aqui automaticamente."><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Adicionar primeiro item</button></Empty></div> : (
         <div className="tblwrap"><table className="tbl">
@@ -1038,7 +1038,7 @@ function Planning({ s, trip, m, update, toast, ask, go, canPlan = true }) {
             const paid = m.paidByItem[i.id] || 0, con = num(i.contracted), est = num(i.estimated), dev = con != null && est != null ? r2(con - est) : null, sched = m.schedByItem[i.id] || 0;
             const st = !con ? <span className="badge">Sem contratação</span> : paid >= con - 0.01 ? <span className="badge b-green">Quitado</span> : paid > 0 ? <span className="badge b-orange">Parcial</span> : sched > 0 ? <span className="badge b-blue">Agendado</span> : <span className="badge b-orange">Não agendado</span>;
             return (<tr key={i.id}>
-              <td><b style={{ fontWeight: 600 }}>{i.description}</b>{i.bookingId && <span className="badge b-green" style={{ marginLeft: 6 }}>Proposta selecionada</span>}{i.programId && <span className="badge b-sand" style={{ marginLeft: 6 }}>Assinatura de programa</span>}{i.dueDate && <div className="muted" style={{ fontSize: 12 }}>Previsto para {fdate(i.dueDate)}</div>}</td>
+              <td><b style={{ fontWeight: 600 }}>{i.description}</b>{i.bookingId && <span className="badge b-green" style={{ marginLeft: 6 }}>Proposta selecionada</span>}{i.programId && <span className="badge b-sand" style={{ marginLeft: 6 }}>Assinatura de programa</span>}{num(i.plannedSaving) > 0 && <span className="badge b-green" style={{ marginLeft: 6 }} title={`Economia prevista com ${i.benefitName || "benefício"}`}><Gift size={11} />economia prevista {brl(i.plannedSaving)}</span>}{i.dueDate && <div className="muted" style={{ fontSize: 12 }}>Previsto para {fdate(i.dueDate)}</div>}</td>
               <td><span className="dot" style={{ background: catColor(i.category), marginRight: 7 }} />{i.category}</td>
               <td className="r">{est != null ? brl(est) : "—"}</td><td className="r">{con != null ? brl(con) : "—"}</td><td className="r">{brl(paid)}</td>
               <td className="r" style={{ color: dev > 0 ? "var(--red)" : dev < 0 ? "var(--green)" : undefined }}>{dev != null ? `${dev > 0 ? "+" : ""}${brl(dev)}` : "—"}</td>
@@ -1062,6 +1062,7 @@ function Planning({ s, trip, m, update, toast, ask, go, canPlan = true }) {
           <p className="note" style={{ marginTop: 14 }}><Info size={14} />Barra clara: previsto. Barra escura: realizado. Vermelho indica que o realizado passou do previsto.</p>
         </div>)}
       {edit && <ItemForm initial={edit} locked={!!edit.bookingId} onSave={save} onClose={() => setEdit(null)} />}
+      {calc === "alimentacao" && <FoodCalc trip={trip} items={m.items} programs={s.programs || []} bookedMeal={m.bookedQuote?.meal} onClose={() => setCalc(null)} onApply={applyCalc} />}
       {calc === "carro" && <CarCalc trip={trip} items={m.items} onClose={() => setCalc(null)} onApply={applyCalc} />}
       {calc === "cruzeiro" && <CruiseCalc trip={trip} items={m.items} onClose={() => setCalc(null)} onApply={applyCalc} />}
       {sch && <ScheduleModal item={sch} paidSoFar={m.paidByItem[sch.id] || 0} openCount={s.payments.filter((p) => p.itemId === sch.id && !["pago", "cancelado"].includes(p.status)).length} onClose={() => setSch(null)} onConfirm={confirmSchedule} />}
@@ -1133,6 +1134,94 @@ function CarCalc({ trip, items, onClose, onApply }) {
       </div>
       <CalcPreview rows={rows} items={items} />
       <p className="note" style={{ marginTop: 10 }}><Info size={14} />Use o consumo do seu carro na estrada, não o da cidade. Os valores entram como previstos; registre os gastos reais em Despesas durante a viagem.</p>
+    </Modal>
+  );
+}
+
+// Alimentação: refeições por dia × preço médio × pessoas, menos o que a hospedagem inclui e o benefício dos clubes.
+const MEALS = [["cafe", "Café da manhã"], ["almoco", "Almoço"], ["jantar", "Jantar"], ["lanche", "Lanches e sobremesas"]];
+const INCLUDED_BY_MEAL = { cafe: ["cafe"], meia: ["cafe", "jantar"], completa: ["cafe", "almoco", "jantar"], all: ["cafe", "almoco", "jantar", "lanche"] };
+function FoodCalc({ trip, items, programs, bookedMeal, onClose, onApply }) {
+  const d = tripDays(trip);
+  const inc = INCLUDED_BY_MEAL[bookedMeal] || [];
+  const [f, setF] = useState(() => ({
+    days: d?.days || "", adults: num(trip.adults) || 1, children: num(trip.children) || 0, childPct: 50,
+    meals: Object.fromEntries(MEALS.map(([k]) => [k, { mode: inc.includes(k) ? "incluido" : k === "lanche" ? "nao" : "fora", price: "", perDay: 1, days: "" }])),
+    benefit: "", benefitMeal: "jantar", uses: "", cards: "",
+    ...(trip.foodCalc || {}),
+  }));
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const setMeal = (k, patch) => setF((p) => ({ ...p, meals: { ...p.meals, [k]: { ...p.meals[k], ...patch } } }));
+  const A = num(f.adults) || 0, C = num(f.children) || 0, cp = (num(f.childPct) ?? 100) / 100;
+  const Peq = A + C * cp;
+  const clubs = programs.filter((p) => (p.rules || []).length);
+  const bOpts = [["", "Não vou usar"], ...clubs.flatMap((p) => p.rules.map((r) => [`${p.id}|${r.id}`, `${p.name}: ${r.label}`]))];
+  const [pid, rid] = String(f.benefit || "").split("|");
+  const prog = clubs.find((p) => p.id === pid); const rule = prog?.rules.find((r) => r.id === rid);
+  const cardsAuto = prog ? Math.max(1, activeMemberships(prog, trip.startDate).length) : 1;
+  const K = Math.max(1, num(f.cards) || cardsAuto);
+  const countOf = (k) => { const x = f.meals[k]; return x.mode === "fora" ? (num(x.days) || num(f.days) || 0) * (k === "lanche" ? num(x.perDay) || 1 : 1) : 0; };
+  const bm = f.meals[f.benefitMeal];
+  // economia por uso do benefício na refeição escolhida
+  let perUse = 0, perUseMemo = "";
+  if (rule && bm?.mode === "fora" && num(bm.price)) {
+    const pr = num(bm.price);
+    if (rule.kind === "2x1") {
+      const plates = [...Array(A).fill(pr), ...Array(C).fill(r2(pr * cp))];
+      const ps = pairSavings(plates, K); perUse = ps.saved;
+      perUseMemo = `${ps.pairs} par(es) com ${K} adesão(ões)${ps.unpaired ? `, ${ps.unpaired} prato(s) sem benefício` : ""}`;
+    } else if (rule.kind === "pct") { perUse = r2(pr * Peq * (num(rule.value) || 0) / 100); perUseMemo = `${rule.value}% sobre a conta da refeição`; }
+    else if (rule.kind === "fixed") { perUse = r2(num(rule.value) || 0); perUseMemo = `${brl(rule.value)} de desconto por uso`; }
+  }
+  const maxUses = countOf(f.benefitMeal);
+  const U = Math.min(num(f.uses) || 0, maxUses);
+  const saving = r2(perUse * U);
+  const rows = [];
+  MEALS.forEach(([k, label]) => {
+    const x = f.meals[k]; const n = countOf(k);
+    if (x.mode !== "fora" || !n || !num(x.price)) return;
+    const gross = r2(n * num(x.price) * Peq);
+    const sv = k === f.benefitMeal ? saving : 0;
+    rows.push({ key: `alimentacao:${k}`, category: "Alimentação", value: r2(gross - sv), saving: sv || undefined, benefitName: sv ? prog.name : undefined,
+      description: `${label}: ${n} refeição(ões)`,
+      memo: `${n} × ${brl(num(x.price))} × ${fmtN(Peq, 1)} pessoa(s)${C ? ` (crianças a ${f.childPct}%)` : ""} = ${brl(gross)}${sv ? `, menos ${brl(sv)} de ${prog.name} em ${U} uso(s)` : ""}` });
+  });
+  const included = MEALS.filter(([k]) => f.meals[k].mode === "incluido").map(([, l]) => l.toLowerCase());
+  return (
+    <Modal wide title="Planejar a alimentação" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn pri" disabled={!rows.length} onClick={() => onApply(rows, f, "foodCalc")}><Check size={16} />Lançar no planejamento</button></>}>
+      <div className="form form3">
+        <div className="sec">Quem e por quanto tempo</div>
+        <Fld label="Dias de viagem"><Inp type="number" min="1" value={f.days} onChange={(v) => set("days", v)} /></Fld>
+        <Fld label="Adultos"><Inp type="number" min="0" value={f.adults} onChange={(v) => set("adults", v)} /></Fld>
+        <Fld label="Crianças" hint={C ? `Custam ${f.childPct}% do valor de um adulto` : ""}><div className="row" style={{ flexWrap: "nowrap", gap: 6 }}><Inp type="number" min="0" value={f.children} onChange={(v) => set("children", v)} />{C > 0 && <Inp type="number" min="0" max="100" value={f.childPct} onChange={(v) => set("childPct", v)} aria-label="Percentual do valor para crianças" />}</div></Fld>
+        <div className="sec">Refeições {bookedMeal && <span className="badge b-green" style={{ marginLeft: 8 }}>Proposta selecionada: {MEAL_LABEL[bookedMeal]}</span>}</div>
+        <div className="full grid" style={{ gap: 8 }}>
+          <div className="mealrow memhead hide-m"><span>Refeição</span><span>Como será</span><span>Valor médio por adulto</span><span>Por dia</span><span>Dias</span></div>
+          {MEALS.map(([k, label]) => { const x = f.meals[k]; return (
+            <div key={k} className="mealrow">
+              <b style={{ fontWeight: 600, fontSize: 13.5 }}>{label}</b>
+              <select className="sel" value={x.mode} onChange={(e) => setMeal(k, { mode: e.target.value })} aria-label={`Como será o ${label}`}><option value="fora">Comer fora</option><option value="incluido">Incluído na hospedagem</option><option value="nao">Não vou considerar</option></select>
+              {x.mode === "fora" ? <Money value={x.price} onChange={(v) => setMeal(k, { price: v })} aria-label={`Valor médio do ${label}`} /> : <span className="muted" style={{ fontSize: 12.5 }}>{x.mode === "incluido" ? "Sem custo extra" : "—"}</span>}
+              {x.mode === "fora" && k === "lanche" ? <Inp type="number" min="1" value={x.perDay} onChange={(v) => setMeal(k, { perDay: v })} aria-label="Lanches por dia" /> : <span className="muted" style={{ fontSize: 12.5 }}>{x.mode === "fora" ? "1" : ""}</span>}
+              {x.mode === "fora" ? <Inp type="number" min="0" value={x.days} placeholder={String(f.days || "")} onChange={(v) => setMeal(k, { days: v })} aria-label="Dias com esta refeição" /> : <span />}
+            </div>); })}
+          <p className="note" style={{ margin: 0 }}><Info size={14} />Informe quanto cada adulto costuma gastar por refeição, com bebida e taxa de serviço. Use “Dias” quando a refeição não acontecer todos os dias, por exemplo almoços em passeios com refeição inclusa.</p>
+        </div>
+        <div className="sec">Desconto de clubes</div>
+        {clubs.length ? <>
+          <Fld label="Benefício"><Sel value={f.benefit} onChange={(v) => set("benefit", v)} opts={bOpts} /></Fld>
+          {rule && <>
+            <Fld label="Em qual refeição"><Sel value={f.benefitMeal} onChange={(v) => set("benefitMeal", v)} opts={MEALS.filter(([k]) => f.meals[k].mode === "fora").map(([k, l]) => [k, l])} /></Fld>
+            <Fld label="Quantas vezes na viagem" hint={maxUses ? `Até ${maxUses}, o número de ${MEALS.find((x) => x[0] === f.benefitMeal)[1].toLowerCase()}s fora` : "Defina o valor da refeição acima"}><Inp type="number" min="0" max={maxUses || undefined} value={f.uses} onChange={(v) => set("uses", v)} placeholder="Ex.: 4" /></Fld>
+            {rule.kind === "2x1" && <Fld label="Adesões levadas à mesa" hint={`${cardsAuto} adesão(ões) válida(s) no início da viagem`}><Inp type="number" min="1" value={f.cards} placeholder={String(cardsAuto)} onChange={(v) => set("cards", v)} /></Fld>}
+            {rule.kind === "other" && <div className="note full"><AlertTriangle size={14} />Esta regra não tem valor fixo, então a economia não pode ser estimada aqui. Use o Roteiro para planejar esses restaurantes um a um.</div>}
+            {perUse > 0 && <div className="alert blue full" style={{ background: "#F1FAF6" }}><Gift size={15} color="#21865B" /><span>Economia por uso: <b>{brl(perUse)}</b> ({perUseMemo}). Em {U || 0} uso(s): <b>{brl(saving)}</b>.</span></div>}
+          </>}
+        </> : <div className="note full"><Gift size={14} />Cadastre o Prime Gourmet ou outro clube em “Benefícios e fidelidade” para descontar o benefício aqui.</div>}
+      </div>
+      <CalcPreview rows={rows} items={items} />
+      {included.length > 0 && <p className="note" style={{ marginTop: 8 }}><CheckCircle2 size={14} />Sem custo: {included.join(", ")} incluído(s) na hospedagem.</p>}
+      <p className="note" style={{ marginTop: 8 }}><Info size={14} />A economia aparece no item do planejamento como “economia prevista”. Para acompanhar o benefício restaurante a restaurante, use o Roteiro; ao pagar, registre em Despesas. Confira no app do clube quais restaurantes participam no seu destino.</p>
     </Modal>
   );
 }

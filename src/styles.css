@@ -217,3 +217,5 @@ input[type=range]{accent-color:#167D9A;width:100%}
 
 /* Compartilhamento: ações ocultas conforme o papel na viagem */
 .ro .act{display:none!important}
+.mealrow{display:grid;grid-template-columns:1.1fr 1.3fr 1fr .6fr .6fr;gap:8px;align-items:center}
+@media(max-width:900px){.mealrow{grid-template-columns:1fr 1fr}.mealrow>b{grid-column:1/-1}}
