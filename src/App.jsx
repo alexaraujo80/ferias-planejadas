@@ -4,10 +4,11 @@ import {
   LayoutDashboard, Plane, Wallet, FileText, CalendarClock, MapPin, Receipt, BarChart3, Settings, Plus, Trash2, Pencil,
   Copy, Archive, ArchiveRestore, Check, X, Star, AlertTriangle, Search, Download, Printer, Sun, Info, Award, Menu,
   Users, CheckCircle2, Upload, ExternalLink, ChevronLeft, ChevronRight, Database, Eye, Heart,
-  Gift, Utensils, Ticket, Umbrella, Landmark, Car, Building2, Paperclip, Calculator, Coins, ArrowRight, Crown, Lock, Ship, Anchor, Waves,
+  Gift, Utensils, Ticket, Umbrella, Landmark, Car, Building2, Paperclip, Calculator, Coins, ArrowRight, Crown, Lock, Ship, Anchor, Waves, CloudSun, Cloud, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning, Droplets,
 } from "lucide-react";
 import { api } from "./lib/billing";
-import { getTides } from "./lib/tides";
+import { getTides, getWeather } from "./lib/tides";
+import { weatherInfo, WEATHER_WINDOW_DAYS } from "./lib/weathercore";
 import { MARINHA_URL, TIDE_WINDOW_DAYS } from "./lib/tidecore";
 import { cloudEnabled, supabase } from "./lib/supabase";
 import { createCloudStore, createLocalStore, readBrowserBackup } from "./lib/storage";
@@ -759,6 +760,8 @@ function Dashboard({ s, trip, m, go, sharedTrip }) {
           <div style={{ fontSize: 15, color: "#2F5566", marginTop: 6 }}>{countTitle}</div>
         </div>
       </section>
+
+      <WeatherCard trip={trip} />
 
       <div className="strip g4" style={{ gridTemplateColumns: undefined }}>
         <div><div className="kl">Orçamento total</div><div className="kv">{brl(m.budget)}</div><div className="kh">{tv ? `${brl(m.budget / tv)} por pessoa` : "—"}</div></div>
@@ -1748,6 +1751,79 @@ function PayCalendar({ pays, month, setMonth, onPick }) {
     </div></div>);
 }
 
+// ---------- Previsão do tempo ----------
+const W_ICON = { sun: Sun, cloudSun: CloudSun, cloud: Cloud, fog: CloudFog, drizzle: CloudDrizzle, rain: CloudRain, snow: CloudSnow, storm: CloudLightning };
+const W_COLOR = { sun: "#E8A23A", cloudSun: "#E8A23A", cloud: "#7A8F99", fog: "#7A8F99", drizzle: "#167D9A", rain: "#167D9A", snow: "#5BA7C4", storm: "#5E4B8B" };
+const WDAY = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const tC = (v) => (v == null ? "—" : `${Math.round(v)}°`);
+function useWeather(local) {
+  const [st, setSt] = useState({ status: local ? "loading" : "idle" });
+  useEffect(() => {
+    if (!local) return undefined;
+    let alive = true; setSt({ status: "loading" });
+    getWeather(local).then((d) => alive && setSt({ status: "ok", data: d })).catch((e) => alive && setSt({ status: "err", error: e.message }));
+    return () => { alive = false; };
+  }, [local]);
+  return st;
+}
+function WTile({ date, w, inTrip }) {
+  const info = weatherInfo(w.code); const Ic = W_ICON[info.icon] || Cloud;
+  const wd = WDAY[new Date(dayNum(date) * 86400000).getUTCDay()];
+  return (
+    <div className={`wtile ${inTrip ? "trip" : ""}`} title={`${info.label}${w.rain ? `, ${String(w.rain).replace(".", ",")} mm` : ""}`}>
+      <span className="wd">{wd} {date.slice(8, 10)}/{date.slice(5, 7)}</span>
+      <Ic size={26} color={W_COLOR[info.icon]} strokeWidth={1.8} />
+      <span className="tt"><b>{tC(w.tmax)}</b> <span className="muted">{tC(w.tmin)}</span></span>
+      <span className="pp"><Droplets size={11} />{w.pop == null ? "—" : `${w.pop}%`}</span>
+    </div>
+  );
+}
+// Dashboard: dias da viagem dentro da previsão; se a viagem estiver longe, a semana atual no destino.
+function WeatherCard({ trip }) {
+  const st = useWeather(trip.destination);
+  if (!trip.destination || st.status === "err" || (st.status === "ok" && !st.data.found)) return null;
+  const today = todayISO();
+  if (trip.endDate && trip.endDate < today) return null;
+  if (st.status !== "ok") return <div className="card"><h3><CloudSun size={16} />Previsão do tempo</h3><p className="muted" style={{ margin: 0, fontSize: 13 }}>Consultando a previsão…</p></div>;
+  const { days, until, place } = st.data;
+  const start = trip.startDate || today;
+  const tripInWindow = start <= until;
+  let list, title, note;
+  if (tripInWindow) {
+    list = Object.keys(days).filter((d) => d >= (start > today ? start : today) && (!trip.endDate || d <= trip.endDate));
+    title = `Previsão para a viagem em ${place.name}`;
+    note = trip.endDate && trip.endDate > until ? `Os dias seguintes entram na previsão um a um; o último dia da viagem, em ${fdate(addDays(trip.endDate, -(WEATHER_WINDOW_DAYS - 1)))}.` : "";
+  } else {
+    list = Object.keys(days).slice(0, 7);
+    title = `Esta semana em ${place.name}`;
+    note = `A previsão dos dias da sua viagem começa em ${fdate(addDays(start, -(WEATHER_WINDOW_DAYS - 1)))}, quando eles entram na janela de ${WEATHER_WINDOW_DAYS} dias.`;
+  }
+  const rainy = tripInWindow ? list.filter((d) => (days[d].pop || 0) >= 60).length : 0;
+  return (
+    <div className="card">
+      <h3><CloudSun size={16} />{title}{place.admin1 ? <small style={{ marginLeft: 6, marginRight: "auto" }}>{place.admin1}</small> : null}{tripInWindow && <small>{list.length} dia(s) com previsão</small>}</h3>
+      <div className="wstrip">{list.map((d) => <WTile key={d} date={d} w={days[d]} inTrip={tripInWindow} />)}</div>
+      {rainy > 0 && <div className="note" style={{ marginTop: 10, color: "#0E6077" }}><CloudRain size={14} />{rainy} dia(s) com chance de chuva de 60% ou mais. Vale deixar passeios ao ar livre para os outros dias.</div>}
+      {note && <p className="note" style={{ marginTop: 10 }}><Info size={14} />{note}</p>}
+      <p className="muted" style={{ margin: "8px 0 0", fontSize: 11.5 }}>Fonte: Open-Meteo. Temperaturas máxima e mínima e chance de chuva no dia.</p>
+    </div>
+  );
+}
+// Roteiro: o tempo previsto no cabeçalho de cada dia
+function WeatherDay({ local, date }) {
+  const st = useWeather(local);
+  if (!local || date < todayISO() || st.status !== "ok" || !st.data.found) return null;
+  const w = st.data.days[date];
+  if (!w) return st.data.until && date > st.data.until ? <div className="tideday muted"><CloudSun size={14} />Tempo em {st.data.place.name}: previsão a partir de {fdate(addDays(date, -(WEATHER_WINDOW_DAYS - 1)))}</div> : null;
+  const info = weatherInfo(w.code); const Ic = W_ICON[info.icon] || Cloud;
+  return (
+    <div className="tideday">
+      <Ic size={15} color={W_COLOR[info.icon]} /><span className="muted">Tempo em {st.data.place.name}:</span>
+      <b style={{ fontWeight: 600 }}>{info.label}</b><span>{tC(w.tmin)} a {tC(w.tmax)}</span><span className="tidechip alta"><Droplets size={11} /> chuva {w.pop == null ? "—" : `${w.pop}%`}</span>
+    </div>
+  );
+}
+
 // ---------- Marés no roteiro ----------
 const TIDE_TYPES = ["praia", "passeio", "escala"];
 const fmtH = (h) => `${h > 0 ? "+" : h < 0 ? "−" : ""}${Math.abs(h).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} m`;
@@ -1997,6 +2073,7 @@ function ItineraryPage({ s, trip, update, toast, ask, canPlan = true, canAct = t
             const wd = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"][new Date(dayNum(d) * 86400000).getUTCDay()];
             return (<div key={d} className="card">
               <h3><span className="serif" style={{ fontSize: 18, fontWeight: 400 }}>{n && n >= 1 && (!trip.endDate || d <= trip.endDate) ? `Dia ${n}` : fdate(d)}</span><span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>{fdate(d)}, {wd}</span><small>{brl(sum(groups[d].filter((i) => i.status !== "cancelada"), (i) => i.estimated))} estimados</small></h3>
+              <WeatherDay local={dayCityOf(groups[d], trip)} date={d} />
               <TideDay local={dayCityOf(groups[d], trip)} date={d} />
               <div className="grid" style={{ gap: 0 }}>{groups[d].sort((a, b) => (a.time || "99").localeCompare(b.time || "99")).map((i) => {
                 const Ic = ITIN_ICON[i.type || "outro"] || MapPin; const ro = ruleOf(programs, i.benefit); const spent = spentIds.has(i.id);
