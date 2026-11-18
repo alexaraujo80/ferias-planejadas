@@ -219,3 +219,12 @@ input[type=range]{accent-color:#167D9A;width:100%}
 .ro .act{display:none!important}
 .mealrow{display:grid;grid-template-columns:1.1fr 1.3fr 1fr .6fr .6fr;gap:8px;align-items:center}
 @media(max-width:900px){.mealrow{grid-template-columns:1fr 1fr}.mealrow>b{grid-column:1/-1}}
+/* Marés */
+.tideday{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px;margin:-4px 0 10px;padding:8px 10px;background:#F3F9FB;border-radius:10px}
+.tidechip{display:inline-flex;gap:4px;align-items:baseline;padding:2px 9px;border-radius:20px;font-weight:600;font-size:12px}
+.tidechip.baixa{background:#FFF4E3;color:#7D5E2C}.tidechip.alta{background:#DDF4FA;color:#0E6077}
+.tidechip small{font-weight:500;opacity:.8}
+.discrow{display:grid;grid-template-columns:1fr 2fr .8fr .8fr .9fr;gap:8px;align-items:center}
+.discwrap{padding:8px 0;border-top:1px dashed var(--line)}
+.discwrap:first-of-type{border-top:0}
+@media(max-width:900px){.discrow{grid-template-columns:1fr 1fr}.discrow>b:first-child,.discrow>select{grid-column:1/-1}}

@@ -4,9 +4,11 @@ import {
   LayoutDashboard, Plane, Wallet, FileText, CalendarClock, MapPin, Receipt, BarChart3, Settings, Plus, Trash2, Pencil,
   Copy, Archive, ArchiveRestore, Check, X, Star, AlertTriangle, Search, Download, Printer, Sun, Info, Award, Menu,
   Users, CheckCircle2, Upload, ExternalLink, ChevronLeft, ChevronRight, Database, Eye, Heart,
-  Gift, Utensils, Ticket, Umbrella, Landmark, Car, Building2, Paperclip, Calculator, Coins, ArrowRight, Crown, Lock, Ship, Anchor,
+  Gift, Utensils, Ticket, Umbrella, Landmark, Car, Building2, Paperclip, Calculator, Coins, ArrowRight, Crown, Lock, Ship, Anchor, Waves,
 } from "lucide-react";
 import { api } from "./lib/billing";
+import { getTides } from "./lib/tides";
+import { MARINHA_URL, TIDE_WINDOW_DAYS } from "./lib/tidecore";
 import { cloudEnabled, supabase } from "./lib/supabase";
 import { createCloudStore, createLocalStore, readBrowserBackup } from "./lib/storage";
 import Auth from "./components/Auth";
@@ -1140,60 +1142,87 @@ function CarCalc({ trip, items, onClose, onApply }) {
 
 // Alimentação: refeições por dia × preço médio × pessoas, menos o que a hospedagem inclui e o benefício dos clubes.
 const MEALS = [["cafe", "Café da manhã"], ["almoco", "Almoço"], ["jantar", "Jantar"], ["lanche", "Lanches e sobremesas"]];
+const MEAL_PLURAL = { cafe: "cafés da manhã", almoco: "almoços", jantar: "jantares", lanche: "lanches" };
 const INCLUDED_BY_MEAL = { cafe: ["cafe"], meia: ["cafe", "jantar"], completa: ["cafe", "almoco", "jantar"], all: ["cafe", "almoco", "jantar", "lanche"] };
 function FoodCalc({ trip, items, programs, bookedMeal, onClose, onApply }) {
   const d = tripDays(trip);
   const inc = INCLUDED_BY_MEAL[bookedMeal] || [];
-  const [f, setF] = useState(() => ({
-    days: d?.days || "", adults: num(trip.adults) || 1, children: num(trip.children) || 0, childPct: 50,
-    meals: Object.fromEntries(MEALS.map(([k]) => [k, { mode: inc.includes(k) ? "incluido" : k === "lanche" ? "nao" : "fora", price: "", perDay: 1, days: "" }])),
-    benefit: "", benefitMeal: "jantar", uses: "", cards: "",
-    ...(trip.foodCalc || {}),
-  }));
+  const [f, setF] = useState(() => {
+    const saved = trip.foodCalc || {};
+    const base = {
+      days: d?.days || "", adults: num(trip.adults) || 1, children: num(trip.children) || 0, childPct: 50, childAgeLimit: 10, childAges: trip.childrenAges || "",
+      meals: Object.fromEntries(MEALS.map(([k]) => [k, { mode: inc.includes(k) ? "incluido" : k === "lanche" ? "nao" : "fora", price: "", perDay: 1, days: "" }])),
+      discounts: {}, ...saved,
+    };
+    // versão anterior guardava um único benefício: vira o desconto da refeição escolhida
+    if (!saved.discounts && saved.benefit) base.discounts = { [saved.benefitMeal || "jantar"]: { benefit: saved.benefit, uses: saved.uses, cards: saved.cards } };
+    delete base.benefit; delete base.benefitMeal; delete base.uses; delete base.cards;
+    return base;
+  });
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const setMeal = (k, patch) => setF((p) => ({ ...p, meals: { ...p.meals, [k]: { ...p.meals[k], ...patch } } }));
-  const A = num(f.adults) || 0, C = num(f.children) || 0, cp = (num(f.childPct) ?? 100) / 100;
-  const Peq = A + C * cp;
+  const setDisc = (k, patch) => setF((p) => ({ ...p, discounts: { ...(p.discounts || {}), [k]: { ...((p.discounts || {})[k] || {}), ...patch } } }));
+  // Crianças acima da idade-limite (padrão: 10 anos) pagam como adulto; até ela, pagam o percentual informado.
+  // Sem idade informada, a criança é considerada no percentual.
+  const A0 = num(f.adults) || 0, C = num(f.children) || 0, cp = (num(f.childPct) ?? 100) / 100;
+  const lim = num(f.childAgeLimit) ?? 10;
+  const ages = String(f.childAges || "").split(/[,;\s]+/).map((x) => num(x)).filter((x) => x != null).slice(0, C);
+  const olderKids = ages.filter((x) => x > lim).length;
+  const A = A0 + olderKids;            // pagam como adulto
+  const H = C - olderKids;             // pagam o percentual
+  const Peq = A + H * cp;
+  const kidsMemo = C ? (H ? ` (${H} criança(s) até ${lim} anos a ${f.childPct}%${olderKids ? `, ${olderKids} acima de ${lim} anos como adulto` : ""})` : ` (${olderKids} criança(s) acima de ${lim} anos como adulto)`) : "";
   const clubs = programs.filter((p) => (p.rules || []).length);
-  const bOpts = [["", "Não vou usar"], ...clubs.flatMap((p) => p.rules.map((r) => [`${p.id}|${r.id}`, `${p.name}: ${r.label}`]))];
-  const [pid, rid] = String(f.benefit || "").split("|");
-  const prog = clubs.find((p) => p.id === pid); const rule = prog?.rules.find((r) => r.id === rid);
-  const cardsAuto = prog ? Math.max(1, activeMemberships(prog, trip.startDate).length) : 1;
-  const K = Math.max(1, num(f.cards) || cardsAuto);
+  const bOpts = [["", "Sem desconto"], ...clubs.flatMap((p) => p.rules.map((r) => [`${p.id}|${r.id}`, `${p.name}: ${r.label}`]))];
   const countOf = (k) => { const x = f.meals[k]; return x.mode === "fora" ? (num(x.days) || num(f.days) || 0) * (k === "lanche" ? num(x.perDay) || 1 : 1) : 0; };
-  const bm = f.meals[f.benefitMeal];
-  // economia por uso do benefício na refeição escolhida
-  let perUse = 0, perUseMemo = "";
-  if (rule && bm?.mode === "fora" && num(bm.price)) {
-    const pr = num(bm.price);
-    if (rule.kind === "2x1") {
-      const plates = [...Array(A).fill(pr), ...Array(C).fill(r2(pr * cp))];
-      const ps = pairSavings(plates, K); perUse = ps.saved;
-      perUseMemo = `${ps.pairs} par(es) com ${K} adesão(ões)${ps.unpaired ? `, ${ps.unpaired} prato(s) sem benefício` : ""}`;
-    } else if (rule.kind === "pct") { perUse = r2(pr * Peq * (num(rule.value) || 0) / 100); perUseMemo = `${rule.value}% sobre a conta da refeição`; }
-    else if (rule.kind === "fixed") { perUse = r2(num(rule.value) || 0); perUseMemo = `${brl(rule.value)} de desconto por uso`; }
-  }
-  const maxUses = countOf(f.benefitMeal);
-  const U = Math.min(num(f.uses) || 0, maxUses);
-  const saving = r2(perUse * U);
+  // Desconto de clube por refeição: cada refeição pode ter o seu benefício e a sua quantidade de usos.
+  const discOf = (k) => {
+    const dc = (f.discounts || {})[k] || {}; const x = f.meals[k]; const max = countOf(k);
+    const [pid, rid] = String(dc.benefit || "").split("|");
+    const prog = clubs.find((p) => p.id === pid); const rule = prog?.rules.find((r) => r.id === rid);
+    const cardsAuto = prog ? activeMemberships(prog, trip.startDate).length : 0;
+    const K = Math.max(1, num(dc.cards) || cardsAuto || 1);
+    const U = Math.min(num(dc.uses) || 0, max);
+    let perUse = 0, memo = "", warn = "";
+    if (rule && x.mode === "fora" && num(x.price)) {
+      const pr = num(x.price);
+      if (rule.kind === "2x1") {
+        const ps = pairSavings([...Array(A).fill(pr), ...Array(H).fill(r2(pr * cp))], K); perUse = ps.saved;
+        memo = `${ps.pairs} par(es) com benefício${ps.unpaired ? `, ${ps.unpaired} prato(s) pago(s) integralmente` : ""}`;
+        if (K > ps.pairs) memo += `; com ${A + H} pratos, só ${ps.pairs} das ${K} adesões são usadas`;
+        if (cardsAuto && K > cardsAuto) warn = `Você informou ${K} adesões, mas há ${cardsAuto} válida(s) no início da viagem.`;
+      } else if (rule.kind === "pct") { perUse = r2(pr * Peq * (num(rule.value) || 0) / 100); memo = `${rule.value}% sobre a conta da refeição`; }
+      else if (rule.kind === "fixed") { perUse = r2(num(rule.value) || 0); memo = `${brl(rule.value)} de desconto por uso`; }
+      else warn = "Esta regra não tem valor fixo; planeje esses restaurantes um a um no Roteiro.";
+    }
+    return { dc, prog, rule, cardsAuto, K, U, max, perUse, memo, warn, saving: r2(perUse * U) };
+  };
+  const eligible = MEALS.filter(([k]) => f.meals[k].mode === "fora");
+  const discs = Object.fromEntries(eligible.map(([k]) => [k, discOf(k)]));
+  const totalSaving = r2(Object.values(discs).reduce((a, x) => a + x.saving, 0));
   const rows = [];
   MEALS.forEach(([k, label]) => {
     const x = f.meals[k]; const n = countOf(k);
     if (x.mode !== "fora" || !n || !num(x.price)) return;
     const gross = r2(n * num(x.price) * Peq);
-    const sv = k === f.benefitMeal ? saving : 0;
-    rows.push({ key: `alimentacao:${k}`, category: "Alimentação", value: r2(gross - sv), saving: sv || undefined, benefitName: sv ? prog.name : undefined,
+    const ds = discs[k]; const sv = ds?.saving || 0;
+    rows.push({ key: `alimentacao:${k}`, category: "Alimentação", value: r2(gross - sv), saving: sv || undefined, benefitName: sv ? ds.prog.name : undefined,
       description: `${label}: ${n} refeição(ões)`,
-      memo: `${n} × ${brl(num(x.price))} × ${fmtN(Peq, 1)} pessoa(s)${C ? ` (crianças a ${f.childPct}%)` : ""} = ${brl(gross)}${sv ? `, menos ${brl(sv)} de ${prog.name} em ${U} uso(s)` : ""}` });
+      memo: `${n} × ${brl(num(x.price))} × ${fmtN(Peq, 1)} pessoa(s)${kidsMemo} = ${brl(gross)}${sv ? `, menos ${brl(sv)} de ${ds.prog.name} em ${ds.U} uso(s)` : ""}` });
   });
   const included = MEALS.filter(([k]) => f.meals[k].mode === "incluido").map(([, l]) => l.toLowerCase());
   return (
-    <Modal wide title="Planejar a alimentação" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn pri" disabled={!rows.length} onClick={() => onApply(rows, f, "foodCalc")}><Check size={16} />Lançar no planejamento</button></>}>
+    <Modal wide title="Planejar a alimentação" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn pri" disabled={!rows.length} onClick={() => onApply(rows, { ...f }, "foodCalc")}><Check size={16} />Lançar no planejamento</button></>}>
       <div className="form form3">
         <div className="sec">Quem e por quanto tempo</div>
         <Fld label="Dias de viagem"><Inp type="number" min="1" value={f.days} onChange={(v) => set("days", v)} /></Fld>
         <Fld label="Adultos"><Inp type="number" min="0" value={f.adults} onChange={(v) => set("adults", v)} /></Fld>
-        <Fld label="Crianças" hint={C ? `Custam ${f.childPct}% do valor de um adulto` : ""}><div className="row" style={{ flexWrap: "nowrap", gap: 6 }}><Inp type="number" min="0" value={f.children} onChange={(v) => set("children", v)} />{C > 0 && <Inp type="number" min="0" max="100" value={f.childPct} onChange={(v) => set("childPct", v)} aria-label="Percentual do valor para crianças" />}</div></Fld>
+        <Fld label="Crianças"><Inp type="number" min="0" value={f.children} onChange={(v) => set("children", v)} /></Fld>
+        {C > 0 && <>
+          <Fld label="Idades das crianças" hint={ages.length < C ? `Informe ${C} idade(s), separadas por vírgula. Sem idade, a criança conta como meia.` : `${H} pagam meia, ${olderKids} paga(m) como adulto`}><Inp value={f.childAges} onChange={(v) => set("childAges", v)} placeholder="Ex.: 13, 8" /></Fld>
+          <Fld label="Meia até qual idade?" hint="Comum: até 10 anos"><Inp type="number" min="0" max="17" value={f.childAgeLimit} onChange={(v) => set("childAgeLimit", v)} /></Fld>
+          <Fld label="Valor da meia (% do adulto)"><Inp type="number" min="0" max="100" value={f.childPct} onChange={(v) => set("childPct", v)} /></Fld>
+        </>}
         <div className="sec">Refeições {bookedMeal && <span className="badge b-green" style={{ marginLeft: 8 }}>Proposta selecionada: {MEAL_LABEL[bookedMeal]}</span>}</div>
         <div className="full grid" style={{ gap: 8 }}>
           <div className="mealrow memhead hide-m"><span>Refeição</span><span>Como será</span><span>Valor médio por adulto</span><span>Por dia</span><span>Dias</span></div>
@@ -1207,21 +1236,30 @@ function FoodCalc({ trip, items, programs, bookedMeal, onClose, onApply }) {
             </div>); })}
           <p className="note" style={{ margin: 0 }}><Info size={14} />Informe quanto cada adulto costuma gastar por refeição, com bebida e taxa de serviço. Use “Dias” quando a refeição não acontecer todos os dias, por exemplo almoços em passeios com refeição inclusa.</p>
         </div>
-        <div className="sec">Desconto de clubes</div>
-        {clubs.length ? <>
-          <Fld label="Benefício"><Sel value={f.benefit} onChange={(v) => set("benefit", v)} opts={bOpts} /></Fld>
-          {rule && <>
-            <Fld label="Em qual refeição"><Sel value={f.benefitMeal} onChange={(v) => set("benefitMeal", v)} opts={MEALS.filter(([k]) => f.meals[k].mode === "fora").map(([k, l]) => [k, l])} /></Fld>
-            <Fld label="Quantas vezes na viagem" hint={maxUses ? `Até ${maxUses}, o número de ${MEALS.find((x) => x[0] === f.benefitMeal)[1].toLowerCase()}s fora` : "Defina o valor da refeição acima"}><Inp type="number" min="0" max={maxUses || undefined} value={f.uses} onChange={(v) => set("uses", v)} placeholder="Ex.: 4" /></Fld>
-            {rule.kind === "2x1" && <Fld label="Adesões levadas à mesa" hint={`${cardsAuto} adesão(ões) válida(s) no início da viagem`}><Inp type="number" min="1" value={f.cards} placeholder={String(cardsAuto)} onChange={(v) => set("cards", v)} /></Fld>}
-            {rule.kind === "other" && <div className="note full"><AlertTriangle size={14} />Esta regra não tem valor fixo, então a economia não pode ser estimada aqui. Use o Roteiro para planejar esses restaurantes um a um.</div>}
-            {perUse > 0 && <div className="alert blue full" style={{ background: "#F1FAF6" }}><Gift size={15} color="#21865B" /><span>Economia por uso: <b>{brl(perUse)}</b> ({perUseMemo}). Em {U || 0} uso(s): <b>{brl(saving)}</b>.</span></div>}
-          </>}
-        </> : <div className="note full"><Gift size={14} />Cadastre o Prime Gourmet ou outro clube em “Benefícios e fidelidade” para descontar o benefício aqui.</div>}
+        <div className="sec">Desconto de clubes por refeição</div>
+        {!clubs.length ? <div className="note full"><Gift size={14} />Cadastre o Prime Gourmet ou outro clube em “Benefícios e fidelidade” para descontar o benefício aqui.</div>
+          : !eligible.length ? <div className="note full"><Info size={14} />Marque ao menos uma refeição como “Comer fora” para aplicar descontos.</div>
+          : <div className="full grid" style={{ gap: 8 }}>
+            <div className="discrow memhead hide-m"><span>Refeição</span><span>Benefício</span><span>Vezes na viagem</span><span>Adesões à mesa</span><span style={{ textAlign: "right" }}>Economia</span></div>
+            {eligible.map(([k, label]) => { const ds = discs[k]; return (
+              <div key={k} className="discwrap">
+                <div className="discrow">
+                  <b style={{ fontWeight: 600, fontSize: 13.5 }}>{label}</b>
+                  <select className="sel" value={ds.dc.benefit || ""} onChange={(e) => setDisc(k, { benefit: e.target.value })} aria-label={`Benefício no ${label}`}>{bOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+                  {ds.rule ? <Inp type="number" min="0" max={ds.max || undefined} value={ds.dc.uses ?? ""} placeholder={`até ${ds.max}`} onChange={(v) => setDisc(k, { uses: v })} aria-label={`Vezes com desconto no ${label}`} /> : <span />}
+                  {ds.rule?.kind === "2x1" ? <Inp type="number" min="1" value={ds.dc.cards ?? ""} placeholder={String(ds.cardsAuto || 1)} onChange={(v) => setDisc(k, { cards: v })} aria-label={`Adesões levadas no ${label}`} /> : <span className="muted" style={{ fontSize: 12.5 }}>{ds.rule ? "—" : ""}</span>}
+                  <b style={{ textAlign: "right", color: ds.saving ? "var(--green)" : "var(--muted)", fontWeight: 700 }}>{ds.rule ? brl(ds.saving) : ""}</b>
+                </div>
+                {ds.rule && (ds.perUse > 0 || ds.warn || !num(f.meals[k].price)) && <div className="note" style={{ margin: "4px 0 0", color: ds.warn ? "#93600E" : undefined }}>{ds.warn ? <AlertTriangle size={14} /> : <Gift size={14} />}<span>
+                  {!num(f.meals[k].price) ? "Informe o valor médio desta refeição acima." : ds.perUse > 0 ? `${brl(ds.perUse)} por uso (${ds.memo}). Em ${ds.U} de até ${ds.max} ${MEAL_PLURAL[k]}: ${brl(ds.saving)}.` : ""}{ds.warn ? ` ${ds.warn}` : ""}</span></div>}
+              </div>); })}
+            {totalSaving > 0 && <div className="alert blue" style={{ background: "#F1FAF6" }}><Gift size={15} color="#21865B" /><span>Economia total prevista com clubes: <b>{brl(totalSaving)}</b>{Object.values(discs).filter((x) => x.saving).length > 1 ? ` (${eligible.filter(([k]) => discs[k].saving).map(([k, l]) => `${l.toLowerCase()} ${brl(discs[k].saving)}`).join(", ")})` : ""}.</span></div>}
+            <p className="note" style={{ margin: 0 }}><Info size={14} />Cada clube define quantas vezes o benefício vale por dia e por mesa. Confira no app do clube antes de usar a mesma adesão no almoço e no jantar.</p>
+          </div>}
       </div>
       <CalcPreview rows={rows} items={items} />
       {included.length > 0 && <p className="note" style={{ marginTop: 8 }}><CheckCircle2 size={14} />Sem custo: {included.join(", ")} incluído(s) na hospedagem.</p>}
-      <p className="note" style={{ marginTop: 8 }}><Info size={14} />A economia aparece no item do planejamento como “economia prevista”. Para acompanhar o benefício restaurante a restaurante, use o Roteiro; ao pagar, registre em Despesas. Confira no app do clube quais restaurantes participam no seu destino.</p>
+      <p className="note" style={{ marginTop: 8 }}><Info size={14} />A economia aparece em cada item do planejamento como “economia prevista”. Para acompanhar restaurante a restaurante, use o Roteiro; ao pagar, registre em Despesas.</p>
     </Modal>
   );
 }
@@ -1710,6 +1748,81 @@ function PayCalendar({ pays, month, setMonth, onPick }) {
     </div></div>);
 }
 
+// ---------- Marés no roteiro ----------
+const TIDE_TYPES = ["praia", "passeio", "escala"];
+const fmtH = (h) => `${h > 0 ? "+" : h < 0 ? "−" : ""}${Math.abs(h).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} m`;
+const toMin = (hhmm) => { const [h, m] = String(hhmm || "").split(":").map(Number); return h * 60 + (m || 0); };
+const fmtDiff = (min) => { const h = Math.floor(min / 60), m = min % 60; return h ? `${h}h${m ? pad(m) : ""}` : `${m} min`; };
+function useTides(local) {
+  const [st, setSt] = useState({ status: local ? "loading" : "idle" });
+  useEffect(() => {
+    if (!local) return undefined;
+    let alive = true; setSt({ status: "loading" });
+    getTides(local).then((d) => alive && setSt({ status: "ok", data: d })).catch((e) => alive && setSt({ status: "err", error: e.message }));
+    return () => { alive = false; };
+  }, [local]);
+  return st;
+}
+const dayCityOf = (items, trip) => items.find((i) => i.city)?.city || trip.destination;
+
+function TidePanel({ trip }) {
+  const st = useTides(trip.destination);
+  if (!trip.destination || st.status !== "ok" || !st.data.coastal) return null;
+  const today = todayISO();
+  const startsIn = trip.startDate ? diffDays(today, trip.startDate) : null;
+  const avail = trip.startDate ? addDays(trip.startDate, -(TIDE_WINDOW_DAYS - 1)) : null;
+  return (
+    <div className="alert blue" style={{ background: "#EAF7FB", alignItems: "flex-start" }}>
+      <Waves size={17} color="#167D9A" />
+      <span style={{ flex: 1 }}>
+        <b>Marés em {st.data.place.name}{st.data.place.admin1 ? `, ${st.data.place.admin1}` : ""}.</b>{" "}
+        {startsIn != null && startsIn >= TIDE_WINDOW_DAYS
+          ? `Os horários de maré alta e baixa aparecem em cada dia do roteiro a partir de ${fdate(avail)}, quando a viagem entra na janela de previsão de ${TIDE_WINDOW_DAYS} dias.`
+          : "Os horários de maré alta e baixa aparecem em cada dia do roteiro."}{" "}
+        Marque nas praias e passeios se dependem de maré baixa ou alta, como as piscinas naturais, para ver o melhor horário.{" "}
+        <a href={MARINHA_URL} target="_blank" rel="noreferrer" style={{ color: "var(--ocean)", fontWeight: 600 }}>Tábua oficial da Marinha</a>
+        <span className="muted" style={{ display: "block", fontSize: 12, marginTop: 4 }}>Fonte: Open-Meteo (Copernicus Marine Service, Météo-France). Valores aproximados, em relação ao nível médio do mar; não servem para navegação.</span>
+      </span>
+    </div>
+  );
+}
+
+function TideDay({ local, date }) {
+  const st = useTides(local);
+  if (!local || date < todayISO()) return null;
+  if (st.status === "loading") return <div className="tideday muted">Consultando marés…</div>;
+  if (st.status !== "ok" || !st.data.coastal) return null;
+  const ev = st.data.days[date];
+  if (!ev?.length) {
+    if (st.data.until && date > st.data.until) return <div className="tideday muted"><Waves size={14} />Marés de {st.data.place.name}: disponíveis a partir de {fdate(addDays(date, -(TIDE_WINDOW_DAYS - 1)))}</div>;
+    return null;
+  }
+  return (
+    <div className="tideday">
+      <Waves size={14} color="#167D9A" /><span className="muted" style={{ marginRight: 2 }}>Marés em {st.data.place.name}:</span>
+      {ev.map((e, k) => <span key={k} className={`tidechip ${e.type}`}>{e.type === "baixa" ? "Baixa" : "Alta"} {e.time} <small>{fmtH(e.h)}</small></span>)}
+    </div>
+  );
+}
+
+function TideHint({ item, local, date }) {
+  const st = useTides(item.tidePref ? local : null);
+  if (!item.tidePref || st.status !== "ok" || !st.data.coastal) return null;
+  const ev = (st.data.days[date] || []).filter((e) => e.type === item.tidePref);
+  if (!ev.length) return <span className="badge" style={{ marginLeft: 6 }}><Waves size={11} />Melhor com maré {item.tidePref}</span>;
+  const day = ev.filter((e) => toMin(e.time) >= 5 * 60 && toMin(e.time) <= 19 * 60);
+  const pool = day.length ? day : ev;
+  const ref = item.time ? toMin(item.time) : 10 * 60;
+  const best = pool.reduce((a, b) => (Math.abs(toMin(b.time) - ref) < Math.abs(toMin(a.time) - ref) ? b : a));
+  const diff = item.time ? toMin(item.time) - toMin(best.time) : 0;
+  const off = item.time && Math.abs(diff) > 90;
+  return (
+    <span className={`badge ${off ? "b-orange" : "b-blue"}`} style={{ marginLeft: 6 }} title="Previsão aproximada (Open-Meteo)">
+      <Waves size={11} />Maré {item.tidePref} às {best.time}{off ? `: seu horário está ${fmtDiff(Math.abs(diff))} ${diff < 0 ? "antes" : "depois"}` : ""}
+    </span>
+  );
+}
+
 // ---------- Roteiro ----------
 const ITIN_ICON = { escala: Anchor, restaurante: Utensils, passeio: Ticket, praia: Umbrella, atracao: Landmark, deslocamento: Car, hospedagem: Building2, outro: MapPin };
 
@@ -1781,6 +1894,7 @@ function ItinForm({ initial, trip, programs, onSave, onClose }) {
       <div className="form">
         <Fld label="Tipo"><Sel value={f.type} onChange={(v) => set("type", v)} opts={ITIN_TYPES} /></Fld>
         <Fld label="Situação"><Sel value={f.status} onChange={(v) => set("status", v)} opts={[["planejada", "Planejada"], ["realizada", "Realizada"], ["cancelada", "Cancelada"]]} /></Fld>
+        {TIDE_TYPES.includes(f.type) && <Fld label="Depende da maré?" full hint="Ex.: piscinas naturais e bancos de areia pedem maré baixa. O app mostra o melhor horário quando a data entra na previsão."><Sel value={f.tidePref || ""} onChange={(v) => set("tidePref", v)} opts={[["", "Não depende"], ["baixa", "Melhor com maré baixa"], ["alta", "Melhor com maré alta"]]} /></Fld>}
         <Fld label={f.type === "restaurante" ? "Restaurante" : "Atividade ou passeio"} err={e.activity} full><Inp value={f.activity} onChange={(v) => set("activity", v)} autoFocus placeholder={f.type === "restaurante" ? "Ex.: Jantar no Restaurante da Orla" : "Ex.: Passeio de catamarã"} /></Fld>
         <Fld label="Data" err={e.date} hint={out ? "Fora do período da viagem" : ""}><Inp type="date" value={f.date} onChange={(v) => set("date", v)} /></Fld>
         <Fld label="Horário"><Inp type="time" value={f.time} onChange={(v) => set("time", v)} /></Fld>
@@ -1876,12 +1990,14 @@ function ItineraryPage({ s, trip, update, toast, ask, canPlan = true, canAct = t
           </div>
           <div className="row"><button className="btn" onClick={exp} disabled={!list.length}><Download size={15} />Exportar CSV</button><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Nova atividade</button></div>
         </div>
+        <TidePanel trip={trip} />
         {!dates.length ? <div className="card"><Empty icon={MapPin} title="Roteiro em branco" text="Inclua restaurantes, praias, passeios e deslocamentos por dia. Se usar um clube como o Prime Gourmet, escolha o benefício na atividade e a economia é calculada."><button className="act btn pri" onClick={() => setEdit({})}><Plus size={16} />Adicionar atividade</button></Empty></div> :
           dates.map((d) => {
             const n = trip.startDate ? diffDays(trip.startDate, d) + 1 : null;
             const wd = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"][new Date(dayNum(d) * 86400000).getUTCDay()];
             return (<div key={d} className="card">
               <h3><span className="serif" style={{ fontSize: 18, fontWeight: 400 }}>{n && n >= 1 && (!trip.endDate || d <= trip.endDate) ? `Dia ${n}` : fdate(d)}</span><span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>{fdate(d)}, {wd}</span><small>{brl(sum(groups[d].filter((i) => i.status !== "cancelada"), (i) => i.estimated))} estimados</small></h3>
+              <TideDay local={dayCityOf(groups[d], trip)} date={d} />
               <div className="grid" style={{ gap: 0 }}>{groups[d].sort((a, b) => (a.time || "99").localeCompare(b.time || "99")).map((i) => {
                 const Ic = ITIN_ICON[i.type || "outro"] || MapPin; const ro = ruleOf(programs, i.benefit); const spent = spentIds.has(i.id);
                 const sav = i.benefit ? r2(num(i.benefit.full) - (num(i.estimated) || 0)) : 0;
@@ -1889,7 +2005,7 @@ function ItineraryPage({ s, trip, update, toast, ask, canPlan = true, canAct = t
                   <div key={i.id} className="itin-row" style={{ opacity: i.status === "cancelada" ? 0.5 : 1 }}>
                     <div className="typeic"><Ic size={16} /></div>
                     <div style={{ minWidth: 0 }}>
-                      <div className="row" style={{ gap: 6 }}><b style={{ color: "var(--ocean)", fontSize: 13 }}>{i.time || "—"}</b><b style={{ fontWeight: 600, textDecoration: i.status === "cancelada" ? "line-through" : "none" }}>{i.activity}</b>{i.status === "realizada" && <span className="badge b-green">Realizada</span>}{i.needsReservation && <span className={`badge ${i.reservationStatus === "confirmada" ? "b-blue" : "b-orange"}`}>Reserva {i.reservationStatus === "confirmada" ? "confirmada" : "pendente"}</span>}{ro && <span className="badge b-sand"><Gift size={11} />{ro.p.name}{sav > 0 ? `, economia ${brl(sav)}` : ""}</span>}</div>
+                      <div className="row" style={{ gap: 6 }}><b style={{ color: "var(--ocean)", fontSize: 13 }}>{i.time || "—"}</b><b style={{ fontWeight: 600, textDecoration: i.status === "cancelada" ? "line-through" : "none" }}>{i.activity}</b>{i.status === "realizada" && <span className="badge b-green">Realizada</span>}{i.needsReservation && <span className={`badge ${i.reservationStatus === "confirmada" ? "b-blue" : "b-orange"}`}>Reserva {i.reservationStatus === "confirmada" ? "confirmada" : "pendente"}</span>}{ro && <span className="badge b-sand"><Gift size={11} />{ro.p.name}{sav > 0 ? `, economia ${brl(sav)}` : ""}</span>}<TideHint item={i} local={i.city || dayCityOf(groups[d], trip)} date={d} /></div>
                       <div className="muted" style={{ fontSize: 12.5 }}>{ITIN_LABEL[i.type || "outro"]}{[i.place, i.city].filter(Boolean).length ? `, ${[i.place, i.city].filter(Boolean).join(", ")}` : ""}{num(i.estimated) ? `. Estimado ${brl(i.estimated)}` : num(i.estimated) === 0 ? ". Gratuita" : ""}{num(i.real) ? `, realizado ${brl(i.real)}` : ""}{i.notes ? `. ${i.notes}` : ""}</div>
                     </div>
                     <div className="row" style={{ gap: 2, flexWrap: "nowrap" }}>
