@@ -33,14 +33,21 @@ export function extremes(times, values) {
   return out;
 }
 
-export async function fetchTideData(name, { apikey, fetchImpl = fetch } = {}) {
+// Coordenadas da cidade (Open-Meteo Geocoding). Compartilhado com a previsão do tempo.
+export async function geocode(name, { apikey, fetchImpl = fetch } = {}) {
   const pre = apikey ? "customer-" : "";
   const key = apikey ? `&apikey=${encodeURIComponent(apikey)}` : "";
   const q = cleanPlace(name);
   if (!q) throw new Error("Informe a cidade.");
   const gr = await fetchImpl(`https://${pre}geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=pt&format=json${key}`);
   const g = await gr.json().catch(() => ({}));
-  const place = g?.results?.[0];
+  return { q, place: g?.results?.[0] || null };
+}
+
+export async function fetchTideData(name, { apikey, fetchImpl = fetch } = {}) {
+  const pre = apikey ? "customer-" : "";
+  const key = apikey ? `&apikey=${encodeURIComponent(apikey)}` : "";
+  const { q, place } = await geocode(name, { apikey, fetchImpl });
   if (!place) return { found: false, query: q };
   const mr = await fetchImpl(`https://${pre}marine-api.open-meteo.com/v1/marine?latitude=${place.latitude}&longitude=${place.longitude}&hourly=sea_level_height_msl&timezone=auto&forecast_days=${TIDE_WINDOW_DAYS}&cell_selection=sea${key}`);
   const m = await mr.json().catch(() => ({}));
