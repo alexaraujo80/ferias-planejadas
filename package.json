@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Planejamento, cotações e controle financeiro de viagens de férias",
   "engines": {
-    "node": ">=18"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "vite",

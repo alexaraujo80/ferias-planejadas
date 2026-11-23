@@ -156,6 +156,57 @@ O organizador convida até 5 pessoas por viagem (6 no total). Cada uma usa a pr�
 
 No SQL Editor do Supabase, execute `supabase/003_compartilhamento.sql` depois dos scripts 1 e 2. Ordem completa para uma instalação nova: `schema.sql`, `002_planos_stripe.sql`, `003_compartilhamento.sql`. Todos podem ser executados de novo sem perder dados.
 
+## Marés no roteiro (Open-Meteo)
+
+Em cada dia do Roteiro aparecem os horários aproximados de maré alta e baixa da cidade das atividades (ou do destino da viagem). Praias, passeios e escalas de cruzeiro podem ser marcados como "melhor com maré baixa" ou "alta"; o app mostra o horário mais próximo e avisa se o horário planejado está a mais de 1h30 dele.
+
+- **Fonte:** Open-Meteo Marine (`sea_level_height_msl`), com coordenadas pela Open-Meteo Geocoding. Preamares e baixa-mares são calculadas a partir da série horária. Valores aproximados, em relação ao nível médio do mar; **não servem para navegação**.
+- **Janela de previsão:** 8 dias. Para viagens mais distantes, o dia mostra a partir de quando os horários estarão disponíveis, com link para a tábua oficial da Marinha.
+- **Cidades longe do mar** (mais de 40 km do ponto marítimo mais próximo) não exibem marés.
+- **Licença:** o uso gratuito da Open-Meteo é para fins não comerciais. Como o app tem planos pagos, contrate um plano comercial em open-meteo.com/en/pricing e cadastre a chave na Vercel como `OPEN_METEO_API_KEY` (sem prefixo `VITE_`). Com a chave, a função `/api/mares` passa a usar os servidores comerciais automaticamente.
+- **Atribuição:** a tela mostra "Fonte: Open-Meteo (Copernicus Marine Service, Météo-France)", exigida pela licença dos dados.
+
+## Previsão do tempo (Open-Meteo)
+
+- **Dashboard:** se a viagem começa em até 16 dias, mostra a previsão de cada dia da viagem (máxima, mínima, chance de chuva e condição) e destaca os dias com chance de chuva de 60% ou mais. Se a viagem estiver mais longe, mostra **"Esta semana em {destino}"** e a data em que os dias da viagem entram na previsão.
+- **Roteiro:** cada dia mostra o tempo previsto na cidade das atividades, acima das marés.
+- **Custo:** usa a mesma conta da Open-Meteo das marés. Para uso comercial, a mesma `OPEN_METEO_API_KEY` vale para as duas funções (`/api/tempo` e `/api/mares`); o plano de entrada já inclui previsão e dados marítimos.
+- **Atribuição:** a tela mostra "Fonte: Open-Meteo", exigido pela licença CC BY 4.0 dos dados.
+
+## Rotas e distâncias no Roteiro (Google Maps)
+
+| Recurso | Custo | Configuração |
+| --- | --- | --- |
+| "Ver rota no Google Maps" (rota do dia) e "Como chegar" (cada atividade) | Gratuito | Nenhuma: abre o Google Maps de quem clica |
+| "Mostrar mapa" (mapa da rota dentro do app) | Gratuito e ilimitado (Maps Embed API) | `VITE_GOOGLE_MAPS_EMBED_KEY` |
+| "Calcular distâncias" (km e tempo entre atividades e total do dia) | Cota gratuita mensal da Routes API; acima dela, pago | `GOOGLE_MAPS_SERVER_KEY` + `supabase/004_rotas.sql` |
+
+- O **endereço da hospedagem** (cadastro da viagem) é o ponto de partida e de chegada de cada dia.
+- As distâncias são calculadas **só quando a pessoa clica**, com **uma consulta por dia** e **cache de 30 dias** no banco. Ficam disponíveis nos planos Viajante e Família (inclui o teste grátis).
+- O app avisa quando o tempo de deslocamento é maior que o intervalo entre os horários de duas atividades.
+
+### Configuração no Google Cloud
+
+1. Em console.cloud.google.com, crie um projeto (ex.: `ferias-planejadas`) e ative o faturamento.
+2. Em **APIs e serviços → Biblioteca**, ative **Maps Embed API** e **Routes API**.
+3. Em **APIs e serviços → Credenciais**, crie duas chaves:
+   - **Chave do mapa (navegador):** restrição de aplicativo **Sites** com `https://ferias-planejadas1.vercel.app/*` (e `http://localhost:5173/*` para testes); restrição de API: somente **Maps Embed API**. Na Vercel: `VITE_GOOGLE_MAPS_EMBED_KEY`.
+   - **Chave do servidor:** restrição de API: somente **Routes API**. Na Vercel: `GOOGLE_MAPS_SERVER_KEY` (sem `VITE_`).
+4. Em **Faturamento → Orçamentos e alertas**, crie um alerta (ex.: R$ 10).
+5. Opcional: em **APIs e serviços → Routes API → Cotas**, limite as requisições por dia (ex.: 300) para travar o custo máximo.
+6. No Supabase, execute `supabase/004_rotas.sql`. Faça o Redeploy na Vercel.
+
+## App instalável e uso sem internet (PWA)
+
+O Férias Planejadas pode ser instalado direto pelo navegador, sem Google Play nem App Store, sem custo de publicação e sem comissão das lojas sobre as assinaturas (a cobrança continua pelo Stripe).
+
+- **Android e computador (Chrome/Edge):** o app oferece o botão "Instalar app".
+- **iPhone (Safari):** o app mostra o passo a passo "Compartilhar → Adicionar à Tela de Início". Quem abrir o link dentro do Instagram ou WhatsApp é orientado a abrir no navegador, porque os navegadores internos não instalam apps.
+- **Sem internet:** as telas abrem com a última cópia dos dados guardada no aparelho. O que for lançado sem sinal fica guardado e é enviado sozinho quando a conexão volta, sem duplicar. Um aviso mostra quando o app está sem conexão.
+- **Sair da conta** apaga a cópia do aparelho, e só é permitido quando tudo já foi sincronizado.
+- **Arquivos:** `public/manifest.webmanifest`, `public/sw.js` e `public/icons/`. O service worker não armazena chamadas à API nem dados de terceiros; a cópia dos dados é feita pelo próprio app.
+- **Atualizações:** cada deploy na Vercel chega aos apps instalados na próxima abertura.
+
 ## Próximos passos (Fase 3)
 
 | Tema | Situação |
@@ -164,6 +215,11 @@ No SQL Editor do Supabase, execute `supabase/003_compartilhamento.sql` depois do
 | Várias adesões por clube e conta da mesa com vários pares | Implementado |
 | Categorias e calculadoras de carro e cruzeiro | Implementado |
 | Viagens compartilhadas, papéis, convites e despesas privadas | Implementado |
+| Marés no roteiro (Open-Meteo) | Implementado |
+| Previsão do tempo no Dashboard e no Roteiro | Implementado |
+| Rotas, mapa e distâncias no Roteiro (Google Maps) | Implementado |
+| App instalável e uso sem internet (PWA) | Implementado |
+| Avisos no celular (parcelas, marés, chuva, documentos) | Próxima etapa |
 | Leitor sem acesso aos valores financeiros | Planejado |
 | Anexos em arquivo (Supabase Storage privado) | Planejado |
 | Login com Google, MFA | Planejado |

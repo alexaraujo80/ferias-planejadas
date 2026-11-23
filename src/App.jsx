@@ -4,14 +4,15 @@ import {
   LayoutDashboard, Plane, Wallet, FileText, CalendarClock, MapPin, Receipt, BarChart3, Settings, Plus, Trash2, Pencil,
   Copy, Archive, ArchiveRestore, Check, X, Star, AlertTriangle, Search, Download, Printer, Sun, Info, Award, Menu,
   Users, CheckCircle2, Upload, ExternalLink, ChevronLeft, ChevronRight, Database, Eye, Heart,
-  Gift, Utensils, Ticket, Umbrella, Landmark, Car, Building2, Paperclip, Calculator, Coins, ArrowRight, Crown, Lock, Ship, Anchor, Waves, CloudSun, Cloud, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning, Droplets,
+  Gift, Utensils, Ticket, Umbrella, Landmark, Car, Building2, Paperclip, Calculator, Coins, ArrowRight, Crown, Lock, Ship, Anchor, Waves, CloudSun, Cloud, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning, Droplets, Navigation, Route, Footprints, Map as MapIcon, Smartphone,
 } from "lucide-react";
 import { api } from "./lib/billing";
 import { getTides, getWeather } from "./lib/tides";
 import { weatherInfo, WEATHER_WINDOW_DAYS } from "./lib/weathercore";
+import { dayStops, stopQuery, directionsUrl, embedUrl, goUrl, computeDayRoute, fmtKm, fmtDur, EMBED_KEY, MAX_WAYPOINTS } from "./lib/maps";
 import { MARINHA_URL, TIDE_WINDOW_DAYS } from "./lib/tidecore";
 import { cloudEnabled, supabase } from "./lib/supabase";
-import { createCloudStore, createLocalStore, readBrowserBackup } from "./lib/storage";
+import { createCloudStore, createLocalStore, readBrowserBackup, clearDeviceCache } from "./lib/storage";
 import Auth from "./components/Auth";
 
 /* =====================================================================
@@ -452,6 +453,11 @@ const SUBTITLE = {
 
 function AppInner({ store, account, onSignOut, me = "local" }) {
   ACTOR = account || "";
+  const online = useOnline();
+  const inst = useInstall();
+  const [installHelp, setInstallHelp] = useState(false);
+  const [installDismissed, setInstallDismissed] = useState(() => { try { return !!localStorage.getItem("fp-install-dismiss"); } catch (e) { return false; } });
+  const askInstall = async () => { if (inst.canPrompt) { const ok = await inst.prompt(); if (ok) toast("App instalado. Procure o ícone do Férias Planejadas na tela inicial."); } else setInstallHelp(true); };
   const [s, setS] = useState(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [persist, setPersist] = useState("idle");
@@ -585,7 +591,25 @@ function AppInner({ store, account, onSignOut, me = "local" }) {
     const ok = info.flag ? !!L[info.flag] : L[info.key] == null || current < L[info.key];
     if (!ok) setUpgrade({ kind }); return ok;
   };
-  const ctx = { s, update, trip, m, toast, ask, go, setActive, storeMode: store.mode, account, onSignOut, plan, refreshPlan, guard, me, role, canPlan, canAct, tripMine, sharedTrip, myTraveler, rpc: store, reload };
+  // Ao voltar a conexão: envia o que ficou guardado no aparelho e atualiza com o que os outros mudaram.
+  useEffect(() => {
+    if (store.mode !== "cloud") return undefined;
+    const on = async () => {
+      const res = await store.save(sRef.current);
+      if (res === true) {
+        setPersist("saved");
+        const r = await store.load(); if (r.ok && r.data && persistRef.current === "saved") setS({ ...EMPTY, ...r.data });
+        refreshPlan(); toast("Conexão restabelecida. Tudo sincronizado.");
+      }
+    };
+    window.addEventListener("online", on);
+    return () => window.removeEventListener("online", on);
+  }, [store]); // eslint-disable-line
+  const safeSignOut = onSignOut ? () => {
+    if (persistRef.current !== "saved") { toast("Há alterações ainda não enviadas. Conecte-se à internet e aguarde “Sincronizado” antes de sair.", "err"); return; }
+    clearDeviceCache(); onSignOut();
+  } : null;
+  const ctx = { s, update, trip, m, toast, ask, go, setActive, storeMode: store.mode, account, onSignOut: safeSignOut, inst, askInstall, online, plan, refreshPlan, guard, me, role, canPlan, canAct, tripMine, sharedTrip, myTraveler, rpc: store, reload };
   const loadDemo = () => {
     if (s.trips.some((t) => t.demo)) { toast("A demonstração já está carregada", "info"); return; }
     const d = buildDemo();
@@ -609,7 +633,8 @@ function AppInner({ store, account, onSignOut, me = "local" }) {
   const navItem = NAV.find((n) => n.k === page);
   const savedLabel = { cloud: "Sincronizado na nuvem", local: "Salvo neste navegador", claude: "Dados salvos" }[store.mode];
   const failLabel = store.mode === "cloud" ? "Falha ao sincronizar, tentando de novo" : "Sem armazenamento: dados só nesta sessão";
-  const pdot = { saved: ["#75D8C3", savedLabel], saving: ["#E8A23A", "Salvando…"], memory: ["#D9534F", failLabel], idle: ["#88AEBB", "Conectando…"] }[persist];
+  const pdotBase = { saved: ["#75D8C3", savedLabel], saving: ["#E8A23A", "Salvando…"], memory: ["#D9534F", failLabel], idle: ["#88AEBB", "Conectando…"] }[persist];
+  const pdot = !online && store.mode === "cloud" ? ["#E8A23A", persist === "saved" ? "Sem internet: usando a cópia do aparelho" : "Sem internet: alterações guardadas no aparelho"] : pdotBase;
 
   return (
     <div className="fp">
@@ -626,6 +651,7 @@ function AppInner({ store, account, onSignOut, me = "local" }) {
         <nav className="nav">
           {NAV.map((n) => <button key={n.k} className={page === n.k ? "on" : ""} onClick={() => go(n.k)} aria-current={page === n.k ? "page" : undefined}><n.i size={17} />{n.l}</button>)}
         </nav>
+        {inst.available && <button className="planchip" onClick={askInstall}><Smartphone size={14} />Instalar app no celular</button>}
         {plan && plan.plan !== "local" && <button className="planchip" onClick={() => go("planos")}><Crown size={14} />{planChip(plan)}</button>}
         <div className="side-foot"><span className="dot" style={{ background: pdot[0] }} />{pdot[1]}</div>
       </aside>
@@ -640,6 +666,8 @@ function AppInner({ store, account, onSignOut, me = "local" }) {
         </header>
         <div className="content">
           {migrate && <div className="banner"><Upload size={18} color="#167D9A" /><span style={{ flex: 1 }}>Encontramos {migrate.trips?.length || 0} viagem(ns) salva(s) neste navegador. Quer enviá-las para a sua conta na nuvem?</span><button className="btn sm" onClick={() => setMigrate(null)}>Agora não</button><button className="btn sm pri" onClick={() => { update(() => ({ ...EMPTY, ...migrate })); setMigrate(null); toast("Dados do navegador enviados para a sua conta"); }}>Enviar para a conta</button></div>}
+          {!online && store.mode === "cloud" && <div className="banner" style={{ background: "#FDF4E4", borderColor: "#F1DDB5" }}><AlertTriangle size={16} color="#E8A23A" /><span style={{ flex: 1 }}>Você está sem internet. Pode continuar usando: o que você lançar fica guardado no aparelho e é enviado quando a conexão voltar.</span></div>}
+          {inst.available && !installDismissed && loaded && <div className="banner show-m"><Smartphone size={18} color="#167D9A" /><span style={{ flex: 1 }}>Instale o Férias Planejadas no celular: abre em tela cheia e funciona sem internet, ideal durante a viagem.</span><button className="btn sm" onClick={() => { setInstallDismissed(true); try { localStorage.setItem("fp-install-dismiss", "1"); } catch (e) { /* ignore */ } }}>Agora não</button><button className="btn sm pri" onClick={askInstall}>Instalar</button></div>}
           {loaded && trip && needsTrip && (role === "leitor" || (!canPlan && ["planejamento", "cotacoes", "pagamentos"].includes(page))) && <div className="banner"><Lock size={16} color="#167D9A" /><span style={{ flex: 1 }}>{role === "leitor" ? "Você acompanha esta viagem como Leitor: pode consultar tudo, sem alterar." : "Nesta viagem, quem altera orçamento, cotações e pagamentos é o organizador ou um editor. Você pode lançar despesas e atividades."}</span></div>}
           {body}
         </div>
@@ -657,6 +685,7 @@ function AppInner({ store, account, onSignOut, me = "local" }) {
           </div>
         ))}
       </div>
+      {installHelp && <InstallHelp inst={inst} onClose={() => setInstallHelp(false)} />}
       {upgrade && <UpgradeModal kind={upgrade.kind} plan={plan} onClose={() => setUpgrade(null)} go={go} />}
       {confirmState && (
         <Modal title={confirmState.title} onClose={() => setConfirm(null)} footer={<>
@@ -851,6 +880,7 @@ function TripForm({ initial, onSave, onClose }) {
         <div className="sec">Preferências</div>
         <Fld label="Objetivo da viagem"><Inp value={f.goal} onChange={(v) => set("goal", v)} placeholder="Ex.: descanso, aniversário" /></Fld>
         <Fld label="Preferências de hospedagem" full={false}><Inp value={f.lodging} onChange={(v) => set("lodging", v)} placeholder="Ex.: pé na areia, café incluso" /></Fld>
+        <Fld label="Endereço da hospedagem" full hint="Ponto de partida e de chegada das rotas de cada dia no Roteiro"><Inp value={f.lodgingAddress} onChange={(v) => set("lodgingAddress", v)} placeholder="Ex.: Hotel Exemplo, Rod. AL-101 Norte, Maragogi" /></Fld>
         <Fld label="Observações gerais"><Inp value={f.notes} onChange={(v) => set("notes", v)} /></Fld>
       </div>
     </Modal>
@@ -1899,6 +1929,58 @@ function TideHint({ item, local, date }) {
   );
 }
 
+// ---------- Rotas do dia (Google Maps) ----------
+function RouteDay({ items, trip, canRoutes, onLocked, cloud }) {
+  const stops = useMemo(() => dayStops(items, trip), [items, trip]);
+  const [mode, setMode] = useState("driving");
+  const [showMap, setShowMap] = useState(false);
+  const [st, setSt] = useState({ status: "idle" });
+  const sig = stops.map((x) => x.q).join("|") + mode;
+  useEffect(() => { setSt({ status: "idle" }); }, [sig]);
+  if (!stops.length) return null;
+  const real = stops.filter((x) => !x.base);
+  const calcStops = stops.slice(0, 12);
+  const calc = async () => {
+    if (!canRoutes) { onLocked(); return; }
+    setSt({ status: "loading" });
+    try { setSt({ status: "ok", data: await computeDayRoute(calcStops, mode === "walking" ? "WALK" : "DRIVE") }); }
+    catch (e) { if (e.code === "LIMITE_ROTAS") { setSt({ status: "idle" }); onLocked(); } else setSt({ status: "err", error: e.message }); }
+  };
+  const embed = showMap ? embedUrl(stops, mode) : "";
+  return (
+    <div className="routeday">
+      <div className="row" style={{ gap: 6 }}>
+        <Route size={15} color="#167D9A" />
+        <span className="muted" style={{ fontSize: 12.5 }}>{real.length} parada(s) com local{trip.lodgingAddress ? ", saindo da hospedagem" : ""}</span>
+        <span style={{ flex: 1 }} />
+        <div className="tabs mini"><button className={mode === "driving" ? "on" : ""} onClick={() => setMode("driving")}><Car size={13} />Carro</button><button className={mode === "walking" ? "on" : ""} onClick={() => setMode("walking")}><Footprints size={13} />A pé</button></div>
+        <a className="btn sm" href={directionsUrl(stops, mode)} target="_blank" rel="noreferrer"><Navigation size={13} />Ver rota no Google Maps</a>
+        {EMBED_KEY && <button className="btn sm" onClick={() => setShowMap((v) => !v)}><MapIcon size={13} />{showMap ? "Ocultar mapa" : "Mostrar mapa"}</button>}
+        {cloud && stops.length > 1 && <button className="btn sm" disabled={st.status === "loading"} onClick={calc}>{canRoutes ? <Route size={13} /> : <Lock size={13} />}{st.status === "loading" ? "Calculando…" : "Calcular distâncias"}</button>}
+      </div>
+      {stops.length - 2 > MAX_WAYPOINTS && <div className="note" style={{ marginTop: 6 }}><Info size={14} />A rota no Google Maps e no mapa usa as {MAX_WAYPOINTS + 2} primeiras paradas do dia.</div>}
+      {embed && <iframe title="Mapa da rota do dia" src={embed} loading="lazy" referrerPolicy="no-referrer-when-downgrade" allowFullScreen style={{ width: "100%", height: 300, border: 0, borderRadius: 12, marginTop: 10 }} />}
+      {st.status === "err" && <div className="note" style={{ marginTop: 8, color: "#A9332F" }}><AlertTriangle size={14} />{st.error}</div>}
+      {st.status === "ok" && (
+        <div className="legs">
+          {st.data.legs.map((l, k) => {
+            const a = calcStops[k], b = calcStops[k + 1]; if (!a || !b) return null;
+            const gap = a.time && b.time && !a.base && !b.base ? toMin(b.time) - toMin(a.time) : null;
+            const tight = gap != null && l.durationSeconds != null && l.durationSeconds / 60 > gap;
+            return (
+              <div key={k} className={`leg ${tight ? "tight" : ""}`}>
+                <span className="lg-from">{a.label}</span><ArrowRight size={13} className="muted" /><span className="lg-to">{b.label}</span>
+                <span className="lg-val">{fmtKm(l.distanceMeters)}, {fmtDur(l.durationSeconds)}</span>
+                {tight && <span className="lg-warn">só {fmtDur(gap * 60)} entre os horários</span>}
+              </div>);
+          })}
+          <div className="leg total"><b>Total do dia</b><span className="lg-val"><b>{fmtKm(st.data.distanceMeters)}</b>, {fmtDur(st.data.durationSeconds)} de deslocamento{mode === "walking" ? " a pé" : ""}</span></div>
+          <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Estimativa do Google Maps sem trânsito em tempo real. {stops.length > 12 ? "Calculado para as 12 primeiras paradas." : ""}</div>
+        </div>)}
+    </div>
+  );
+}
+
 // ---------- Roteiro ----------
 const ITIN_ICON = { escala: Anchor, restaurante: Utensils, passeio: Ticket, praia: Umbrella, atracao: Landmark, deslocamento: Car, hospedagem: Building2, outro: MapPin };
 
@@ -2032,7 +2114,8 @@ function DocsPanel({ s, trip, update, toast, ask, canPlan = true }) {
   );
 }
 
-function ItineraryPage({ s, trip, update, toast, ask, canPlan = true, canAct = true, me = "local", sharedTrip, myTraveler }) {
+function ItineraryPage({ s, trip, update, toast, ask, canPlan = true, canAct = true, me = "local", sharedTrip, myTraveler, plan, guard = () => true, storeMode }) {
+  const canRoutes = plan?.limits ? plan.limits.can_routes !== false : true;
   const itCan = (i) => canPlan || (canAct && (!i._by || i._by === me));
   const programs = s.programs || [];
   const [tab, setTab] = useState("roteiro");
@@ -2075,6 +2158,7 @@ function ItineraryPage({ s, trip, update, toast, ask, canPlan = true, canAct = t
               <h3><span className="serif" style={{ fontSize: 18, fontWeight: 400 }}>{n && n >= 1 && (!trip.endDate || d <= trip.endDate) ? `Dia ${n}` : fdate(d)}</span><span className="muted" style={{ fontWeight: 500, fontSize: 13 }}>{fdate(d)}, {wd}</span><small>{brl(sum(groups[d].filter((i) => i.status !== "cancelada"), (i) => i.estimated))} estimados</small></h3>
               <WeatherDay local={dayCityOf(groups[d], trip)} date={d} />
               <TideDay local={dayCityOf(groups[d], trip)} date={d} />
+              <RouteDay items={s.itinerary.filter((x) => x.tripId === trip.id && x.date === d)} trip={trip} canRoutes={canRoutes} onLocked={() => guard("routes")} cloud={storeMode === "cloud"} />
               <div className="grid" style={{ gap: 0 }}>{groups[d].sort((a, b) => (a.time || "99").localeCompare(b.time || "99")).map((i) => {
                 const Ic = ITIN_ICON[i.type || "outro"] || MapPin; const ro = ruleOf(programs, i.benefit); const spent = spentIds.has(i.id);
                 const sav = i.benefit ? r2(num(i.benefit.full) - (num(i.estimated) || 0)) : 0;
@@ -2087,6 +2171,7 @@ function ItineraryPage({ s, trip, update, toast, ask, canPlan = true, canAct = t
                     </div>
                     <div className="row" style={{ gap: 2, flexWrap: "nowrap" }}>
                       {i.status !== "cancelada" && (spent ? <span className="badge b-green hide-m">Gasto lançado</span> : <button className="act btn sm" onClick={() => setSpend({ description: i.activity, category: ITIN_CAT[i.type || "outro"], amount: num(i.real) || num(i.estimated) || "", date: i.date, place: [i.place, i.city].filter(Boolean).join(", "), benefit: i.benefit, itineraryId: i.id, status: "paga", method: "Pix", shared: false, person: myTraveler || "" })}><Receipt size={13} />Registrar gasto</button>)}
+                      {stopQuery(i, trip) && <a className="ib" href={goUrl(stopQuery(i, trip))} target="_blank" rel="noreferrer" aria-label="Como chegar" title="Como chegar (Google Maps)"><Navigation size={15} /></a>}
                       {i.link && <a className="act ib" href={i.link} target="_blank" rel="noreferrer" aria-label="Abrir link"><ExternalLink size={15} /></a>}
                       {i.status !== "cancelada" && itCan(i) && <button className="act ib" title={i.status === "realizada" ? "Marcar como planejada" : "Marcar como realizada"} aria-label="Alternar realizada" onClick={() => toggle(i)}><CheckCircle2 size={16} color={i.status === "realizada" ? "#21865B" : undefined} /></button>}
                       {itCan(i) && <><button className="act ib" aria-label="Editar" onClick={() => setEdit(i)}><Pencil size={15} /></button>
@@ -2687,7 +2772,7 @@ function ImportCSV({ s, trip, update, toast, guard = () => true, locked }) {
 }
 
 // ---------- Configurações ----------
-function ConfigPage({ s, trip, m, update, toast, ask, loadDemo, persist, storeMode, account, onSignOut, plan, guard }) {
+function ConfigPage({ s, trip, m, update, toast, ask, loadDemo, persist, storeMode, account, onSignOut, plan, guard, inst, askInstall }) {
   const fileRef = useRef(null);
   const hasDemo = s.trips.some((t) => t.demo);
   const removeDemo = () => ask({ title: "Remover dados de demonstração", danger: true, cta: "Remover demonstração", message: "A viagem de demonstração e tudo o que foi lançado nela serão excluídos. Suas viagens reais e seus programas de benefícios não são afetados.", onConfirm: () => { update((st) => { const ids = new Set(st.trips.filter((t) => t.demo).map((t) => t.id)); const k = (x) => !ids.has(x.tripId); return withLog({ ...st, trips: st.trips.filter((t) => !t.demo), items: st.items.filter(k), quotes: st.quotes.filter(k), bookings: st.bookings.filter(k), payments: st.payments.filter(k), expenses: st.expenses.filter(k), itinerary: st.itinerary.filter(k), redemptions: (st.redemptions || []).filter(k), docs: (st.docs || []).filter(k), log: (st.log || []).filter(k), activeTripId: ids.has(st.activeTripId) ? null : st.activeTripId }, null, "Demonstração removida"); }); toast("Dados de demonstração removidos"); } });
@@ -2712,6 +2797,10 @@ function ConfigPage({ s, trip, m, update, toast, ask, loadDemo, persist, storeMo
     <div className="grid g2" style={{ alignItems: "start" }}>
       <div className="grid">
         <div className="card"><h3><Database size={16} />Armazenamento e conta</h3><p style={{ margin: "0 0 10px" }}><span className={`badge ${persist === "saved" ? "b-green" : persist === "memory" ? "b-red" : "b-orange"}`}>{persist === "saved" ? (storeMode === "cloud" ? "Sincronizado" : "Salvo") : persist === "memory" ? (storeMode === "cloud" ? "Falha na sincronização" : "Somente sessão") : "Salvando…"}</span></p><p className="muted" style={{ margin: 0, fontSize: 13 }}>{storeText}</p>{onSignOut && <div className="row" style={{ marginTop: 12 }}><button className="btn" onClick={onSignOut}>Sair da conta</button></div>}</div>
+        {inst && <div className="card"><h3><Smartphone size={16} />App no celular</h3>
+          {inst.standalone ? <p className="muted" style={{ margin: 0, fontSize: 13 }}><CheckCircle2 size={14} color="#21865B" style={{ verticalAlign: -2 }} /> Você está usando o app instalado. Ele abre em tela cheia e funciona sem internet: o que for lançado sem sinal é enviado quando a conexão voltar.</p>
+            : <><p className="muted" style={{ margin: "0 0 12px", fontSize: 13 }}>Instale direto pelo navegador, sem loja de aplicativos: abre em tela cheia, tem ícone na tela inicial e funciona sem internet durante a viagem.</p><button className="btn pri" onClick={askInstall}><Smartphone size={15} />{inst.canPrompt ? "Instalar app" : "Como instalar"}</button></>}
+        </div>}
         <ImportCSV s={s} trip={trip} update={update} toast={toast} guard={guard} locked={plan?.limits ? !plan.limits.can_import_csv : false} />
         <div className="card"><h3>Backup e exportação</h3>
           <div className="grid" style={{ gap: 8 }}>
@@ -2804,6 +2893,57 @@ function ShareModal({ trip, s, me, rpc, reload, toast, guard, ask, onClose }) {
   );
 }
 
+// ---------- App instalável (PWA) ----------
+// O navegador avisa que o app pode ser instalado antes de a tela montar: guardamos o aviso aqui.
+let deferredInstall = null; const installListeners = new Set();
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredInstall = e; installListeners.forEach((f) => f()); });
+  window.addEventListener("appinstalled", () => { deferredInstall = null; try { localStorage.setItem("fp-installed", "1"); } catch (e) { /* ignore */ } installListeners.forEach((f) => f()); });
+}
+function useInstall() {
+  const [, force] = useState(0);
+  useEffect(() => { const f = () => force((x) => x + 1); installListeners.add(f); return () => installListeners.delete(f); }, []);
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const standalone = typeof window !== "undefined" && ((window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true);
+  const ios = /iphone|ipad|ipod/i.test(ua) || (typeof navigator !== "undefined" && navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const inApp = /Instagram|FBAN|FBAV|WhatsApp|Line\//i.test(ua); // navegadores internos não instalam apps
+  const iosSafari = ios && !/CriOS|FxiOS|EdgiOS/i.test(ua) && !inApp;
+  return {
+    standalone, ios, iosSafari, inApp, canPrompt: !!deferredInstall,
+    available: !standalone && (!!deferredInstall || ios || inApp),
+    async prompt() { if (!deferredInstall) return false; deferredInstall.prompt(); const r = await deferredInstall.userChoice.catch(() => ({})); deferredInstall = null; force((x) => x + 1); return r.outcome === "accepted"; },
+  };
+}
+function InstallHelp({ inst, onClose }) {
+  return (
+    <Modal title="Instalar o Férias Planejadas" onClose={onClose} footer={<button className="btn pri" onClick={onClose}>Entendi</button>}>
+      {inst.inApp ? (
+        <div className="grid" style={{ gap: 10 }}>
+          <p style={{ margin: 0 }}>Você abriu o app dentro do Instagram, WhatsApp ou outro aplicativo, e por aí não é possível instalar.</p>
+          <p style={{ margin: 0 }}><b>Toque nos três pontos (⋯) e escolha “Abrir no navegador”</b>{inst.ios ? " (Safari)" : " (Chrome)"}. Depois volte aqui e toque em “Instalar app”.</p>
+        </div>
+      ) : inst.ios ? (
+        <div className="grid" style={{ gap: 12 }}>
+          {!inst.iosSafari && <div className="alert orange"><AlertTriangle size={15} color="#E8A23A" /><span>No iPhone, a instalação é feita pelo <b>Safari</b>. Abra este endereço no Safari e siga os passos.</span></div>}
+          {[["1", "Toque no botão Compartilhar", "O quadrado com uma seta para cima, na barra do Safari."], ["2", "Escolha “Adicionar à Tela de Início”", "Role a lista de opções para baixo, se precisar."], ["3", "Toque em “Adicionar”", "O ícone do Férias Planejadas aparece na tela inicial e abre em tela cheia."]].map(([n, t, d]) => (
+            <div key={n} className="row" style={{ alignItems: "flex-start", flexWrap: "nowrap", gap: 12 }}>
+              <span className="pos" style={{ width: 34, height: 34, fontSize: 16, flexShrink: 0 }}>{n}</span>
+              <div><b>{t}</b><div className="muted" style={{ fontSize: 13 }}>{d}</div></div>
+            </div>))}
+        </div>
+      ) : (
+        <p style={{ margin: 0 }}>No Chrome, toque no menu <b>⋮</b> e escolha <b>“Instalar app”</b> ou <b>“Adicionar à tela inicial”</b>.</p>
+      )}
+      <p className="note" style={{ marginTop: 14 }}><Info size={14} />Instalado, o app abre em tela cheia, funciona sem internet e não ocupa espaço como os apps das lojas.</p>
+    </Modal>
+  );
+}
+function useOnline() {
+  const [on, setOn] = useState(typeof navigator === "undefined" ? true : navigator.onLine !== false);
+  useEffect(() => { const a = () => setOn(true), b = () => setOn(false); window.addEventListener("online", a); window.addEventListener("offline", b); return () => { window.removeEventListener("online", a); window.removeEventListener("offline", b); }; }, []);
+  return on;
+}
+
 // ---------- Planos e assinaturas ----------
 const LIMITS = {
   trips: { key: "max_active_trips", title: "Mais de uma viagem ativa", text: (n) => `O plano Gratuito mantém ${n} viagem ativa por vez. Para planejar outra, arquive uma viagem concluída ou assine o Viajante ou o Família.` },
@@ -2811,6 +2951,7 @@ const LIMITS = {
   programs: { key: "max_programs", title: "Mais clubes e programas", text: (n) => `O plano Gratuito inclui ${n} clube ou programa de benefícios. Assine para acompanhar todos os seus clubes, pontos e milhas.` },
   memberships: { key: "max_memberships_per_program", title: "Mais adesões no mesmo clube", text: (n) => `O plano Gratuito permite ${n} adesão por clube. Para registrar os cartões de outros viajantes, como várias adesões do Prime Gourmet na mesma mesa, assine o Viajante ou o Família.` },
   weights: { flag: "can_edit_weights", title: "Comparativo personalizado", text: () => "No plano Gratuito o ranking usa os pesos padrão. Assine para ajustar o peso de preço, hospedagem, voo e serviços conforme o que importa para você." },
+  routes: { flag: "can_routes", title: "Distâncias calculadas", text: () => "Calcular a distância e o tempo entre as atividades de cada dia faz parte dos planos Viajante e Família. O botão “Ver rota no Google Maps” continua livre em todos os planos." },
   share: { flag: "max_members_per_trip", title: "Viagem compartilhada", text: () => "Compartilhar a viagem com a família faz parte do plano Família: cada pessoa lança os próprios gastos no celular e o acerto de contas sai automático." },
   import: { flag: "can_import_csv", title: "Importação de planilhas", text: () => "A importação de CSV está disponível nos planos Viajante e Família. A exportação e o backup continuam livres em todos os planos." },
 };
@@ -2838,6 +2979,7 @@ function planFeatures(l) {
     [l.max_programs == null ? "Clubes, pontos e milhas ilimitados" : `${l.max_programs} clube ou programa de benefícios`, true],
     [l.max_memberships_per_program == null ? "Várias adesões por clube" : `${l.max_memberships_per_program} adesão por clube`, true],
     ["Importação de planilhas CSV", !!l.can_import_csv],
+    ["Distâncias e tempos entre as atividades", !!l.can_routes],
     [l.max_members_per_trip ? `Viagem compartilhada com até ${l.max_members_per_trip} pessoas` : "Viagem compartilhada em família", !!l.max_members_per_trip],
     ["Exportação CSV e backup completo", true],
   ];
@@ -2944,15 +3086,23 @@ export default function App() {
   });
   const [session, setSession] = useState(cloudEnabled ? undefined : null);
   const [recovery, setRecovery] = useState(false);
+  const [offlineUser, setOfflineUser] = useState(null);
   useEffect(() => {
     if (!cloudEnabled) return;
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
+    supabase.auth.getSession().then(({ data }) => {
+      const sess = data.session || null;
+      if (!sess && typeof navigator !== "undefined" && navigator.onLine === false) {
+        try { const last = JSON.parse(localStorage.getItem("fp-last-user") || "null"); if (last?.id) setOfflineUser(last); } catch (e) { /* ignore */ }
+      }
+      setSession(sess);
+    }).catch(() => setSession(null));
     const { data } = supabase.auth.onAuthStateChange((ev, sess) => { if (ev === "PASSWORD_RECOVERY") setRecovery(true); setSession(sess || null); });
     return () => data.subscription.unsubscribe();
   }, []);
-  const uidKey = session?.user?.id || "";
+  useEffect(() => { if (session?.user) { try { localStorage.setItem("fp-last-user", JSON.stringify({ id: session.user.id, email: session.user.email })); } catch (e) { /* ignore */ } setOfflineUser(null); } }, [session]);
+  const uidKey = session?.user?.id || offlineUser?.id || "";
   const store = useMemo(() => (cloudEnabled ? (uidKey ? createCloudStore(supabase, uidKey) : null) : createLocalStore()), [uidKey]);
   if (cloudEnabled && session === undefined) return <div className="fp auth-wrap"><p className="muted">Carregando…</p></div>;
-  if (cloudEnabled && (!session || recovery)) return <Auth supabase={supabase} recovery={recovery} onRecovered={() => setRecovery(false)} />;
-  return <AppInner key={uidKey || "local"} store={store} me={uidKey || "local"} account={session?.user?.email || ""} onSignOut={cloudEnabled ? () => supabase.auth.signOut() : null} />;
+  if (cloudEnabled && ((!session && !offlineUser) || recovery)) return <Auth supabase={supabase} recovery={recovery} onRecovered={() => setRecovery(false)} />;
+  return <AppInner key={uidKey || "local"} store={store} me={uidKey || "local"} account={session?.user?.email || offlineUser?.email || ""} onSignOut={cloudEnabled ? () => supabase.auth.signOut() : null} />;
 }

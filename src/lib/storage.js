@@ -28,6 +28,10 @@ export const TABLES = {
 // Sem nuvem não há contas nem cobrança: tudo liberado para uso pessoal.
 const LOCAL_PLAN = { plan: "local", limits: { max_active_trips: null, max_quotes_per_trip: null, max_programs: null, max_memberships_per_program: null, can_edit_weights: true, can_import_csv: true, max_members_per_trip: 0 }, catalog: [] };
 
+export function clearDeviceCache() {
+  try { Object.keys(localStorage).filter((k) => k.startsWith("fp-cache-") || k === "fp-last-user").forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
+}
+
 export function readBrowserBackup() {
   try { const v = localStorage.getItem(KEY); return v ? JSON.parse(v) : null; } catch (e) { return null; }
 }
@@ -57,6 +61,19 @@ export function createCloudStore(supabase, userId) {
   // Último estado confirmado no banco: coleção -> Map(id -> { json, owner })
   let snap = {};
   let snapSettings = "";
+
+  // Cópia no aparelho para uso sem internet: o último estado confirmado no banco e,
+  // se houver, as alterações ainda não enviadas. Quando a conexão volta, o envio é retomado.
+  const CK = `fp-cache-${userId}`;
+  const readCache = () => { try { return JSON.parse(localStorage.getItem(CK) || "null") || {}; } catch (e) { return {}; } };
+  const writeCache = (c) => { try { localStorage.setItem(CK, JSON.stringify({ ...c, at: new Date().toISOString() })); } catch (e) { /* sem espaço: segue só em memória */ } };
+  const buildSnap = (state) => {
+    const tripOwner = new Map((state.trips || []).map((t) => [String(t.id), t._owner]));
+    snap = {};
+    Object.keys(TABLES).forEach((col) => { snap[col] = new Map((state[col] || []).map((r) => [String(r.id), { json: JSON.stringify(r), owner: ownerFor(col, r, tripOwner) }])); });
+    snapSettings = JSON.stringify({ activeTripId: state.activeTripId ?? null });
+  };
+  const isNetwork = (e) => (typeof navigator !== "undefined" && navigator.onLine === false) || /fetch|network|Failed|ERR_|timeout/i.test(String(e?.message || e || ""));
 
   // Registros de viagem são gravados com user_id = organizador da viagem (mesmo quando
   // quem lança é um convidado). _owner e _by vêm do banco e nunca são enviados de volta.
@@ -125,12 +142,17 @@ export function createCloudStore(supabase, userId) {
         state.activeTripId = prof?.settings?.activeTripId ?? null;
         state.shared = {};
         if (!ctx.error) (ctx.data || []).forEach((x) => { state.shared[x.trip_id] = x; });
-        const tripOwner = new Map(state.trips.map((t) => [String(t.id), t._owner]));
-        snap = {};
-        Object.keys(TABLES).forEach((col) => { snap[col] = new Map((state[col] || []).map((r) => [String(r.id), { json: JSON.stringify(r), owner: ownerFor(col, r, tripOwner) }])); });
-        snapSettings = JSON.stringify({ activeTripId: state.activeTripId });
-        return { data: state, ok: true };
+        buildSnap(state);
+        // Alterações feitas sem internet e ainda não enviadas continuam valendo sobre o que veio do banco.
+        const pending = readCache().pending;
+        writeCache({ confirmed: state, pending: pending || null });
+        return { data: pending ? { ...pending, shared: state.shared } : state, ok: true, pending: !!pending };
       } catch (e) {
+        const c = readCache();
+        if (c.confirmed && isNetwork(e)) {
+          buildSnap(c.confirmed);
+          return { data: c.pending || c.confirmed, ok: true, offline: true, pending: !!c.pending };
+        }
         console.error("Falha ao carregar da nuvem", e);
         return { data: null, ok: false };
       }
@@ -160,6 +182,7 @@ export function createCloudStore(supabase, userId) {
         const settings = JSON.stringify({ activeTripId: s.activeTripId ?? null });
         if (settings !== snapSettings) { await must(supabase.from("profiles").update({ settings: JSON.parse(settings) }).eq("id", userId)); snapSettings = settings; }
         snap = next;
+        writeCache({ confirmed: s, pending: null });
         return true;
       } catch (e) {
         const msg = String(e?.message || "");
@@ -167,8 +190,11 @@ export function createCloudStore(supabase, userId) {
         if (msg.startsWith("LIMITE_")) return { limit: msg.split(/\s/)[0] };
         // Recusa por permissão (papel na viagem compartilhada): idem.
         if (e?.code === "42501" || /row-level security/i.test(msg)) return { denied: true };
-        console.error("Falha ao sincronizar", e);
-        return false; // o snapshot não muda: tudo que faltou é reenviado na próxima tentativa
+        // Sem conexão (ou erro temporário): guarda no aparelho e reenvia depois. O snapshot não muda,
+        // então tudo o que faltou é reenviado na próxima tentativa, sem duplicar.
+        writeCache({ ...readCache(), pending: s });
+        if (!isNetwork(e)) console.error("Falha ao sincronizar", e);
+        return false;
       }
     },
   };
