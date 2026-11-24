@@ -14,6 +14,7 @@ import { MARINHA_URL, TIDE_WINDOW_DAYS } from "./lib/tidecore";
 import { cloudEnabled, supabase } from "./lib/supabase";
 import { createCloudStore, createLocalStore, readBrowserBackup, clearDeviceCache } from "./lib/storage";
 import Auth from "./components/Auth";
+import Landing from "./components/Landing";
 
 /* =====================================================================
    FÉRIAS PLANEJADAS — MVP
@@ -3087,6 +3088,8 @@ export default function App() {
   const [session, setSession] = useState(cloudEnabled ? undefined : null);
   const [recovery, setRecovery] = useState(false);
   const [offlineUser, setOfflineUser] = useState(null);
+  // Visitante sem conta vê a apresentação; quem chega por convite vai direto para a conta.
+  const [authMode, setAuthMode] = useState(() => { try { return localStorage.getItem("fp-convite") ? "criar" : null; } catch (e) { return null; } });
   useEffect(() => {
     if (!cloudEnabled) return;
     supabase.auth.getSession().then(({ data }) => {
@@ -3103,6 +3106,7 @@ export default function App() {
   const uidKey = session?.user?.id || offlineUser?.id || "";
   const store = useMemo(() => (cloudEnabled ? (uidKey ? createCloudStore(supabase, uidKey) : null) : createLocalStore()), [uidKey]);
   if (cloudEnabled && session === undefined) return <div className="fp auth-wrap"><p className="muted">Carregando…</p></div>;
-  if (cloudEnabled && ((!session && !offlineUser) || recovery)) return <Auth supabase={supabase} recovery={recovery} onRecovered={() => setRecovery(false)} />;
+  if (cloudEnabled && !session && !offlineUser && !recovery && !authMode) return <Landing onStart={() => { setAuthMode("criar"); window.scrollTo(0, 0); }} onLogin={() => { setAuthMode("entrar"); window.scrollTo(0, 0); }} />;
+  if (cloudEnabled && ((!session && !offlineUser) || recovery)) return <Auth key={authMode || "entrar"} supabase={supabase} recovery={recovery} onRecovered={() => setRecovery(false)} initialMode={authMode || "entrar"} onBack={() => setAuthMode(null)} />;
   return <AppInner key={uidKey || "local"} store={store} me={uidKey || "local"} account={session?.user?.email || offlineUser?.email || ""} onSignOut={cloudEnabled ? () => supabase.auth.signOut() : null} />;
 }

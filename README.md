@@ -207,6 +207,13 @@ O Férias Planejadas pode ser instalado direto pelo navegador, sem Google Play n
 - **Arquivos:** `public/manifest.webmanifest`, `public/sw.js` e `public/icons/`. O service worker não armazena chamadas à API nem dados de terceiros; a cópia dos dados é feita pelo próprio app.
 - **Atualizações:** cada deploy na Vercel chega aos apps instalados na próxima abertura.
 
+## Página de apresentação (landing page)
+
+Quem acessa o endereço sem estar logado vê a apresentação do app (`src/components/Landing.jsx`): o que é, como funciona, recursos, plano Família, planos com preços lidos do Stripe, perguntas frequentes e o botão "Começar grátis por 14 dias". "Começar grátis" leva ao cadastro; "Entrar", ao login. Quem chega por um link de convite vai direto para a conta.
+
+- **Compartilhamento do link:** `index.html` tem título, descrição e a imagem `public/og-image.png`, usados por WhatsApp, Instagram e Facebook ao exibir o link. Se o domínio mudar, atualize o endereço em `og:image`.
+- **Anúncios:** use o endereço principal do app como destino.
+
 ## Próximos passos (Fase 3)
 
 | Tema | Situação |

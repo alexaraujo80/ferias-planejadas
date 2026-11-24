@@ -16,8 +16,8 @@ const TITLES = {
   nova: ["Crie uma nova senha", "Escolha uma senha com pelo menos 8 caracteres."],
 };
 
-export default function Auth({ supabase, recovery, onRecovered }) {
-  const [mode, setMode] = useState("entrar");
+export default function Auth({ supabase, recovery, onRecovered, initialMode = "entrar", onBack }) {
+  const [mode, setMode] = useState(initialMode);
   const m = recovery ? "nova" : mode;
   const [email, setEmail] = useState(""); const [pw, setPw] = useState(""); const [pw2, setPw2] = useState("");
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(null);
@@ -48,6 +48,7 @@ export default function Auth({ supabase, recovery, onRecovered }) {
   return (
     <div className="fp auth-wrap">
       <div className="auth-card">
+        {onBack && m !== "nova" && <button onClick={onBack} style={{ background: "none", border: 0, color: "#167D9A", fontWeight: 600, padding: 0, marginBottom: 14, cursor: "pointer" }}>← Conhecer o Férias Planejadas</button>}
         <div className="logo" style={{ padding: 0 }}><div className="logo-mark" style={{ background: "#DDF4FA" }}><Sun size={20} /></div><div><b style={{ color: "#173A4A" }}>Férias Planejadas</b><small style={{ color: "#5C7884" }}>planejar, comparar, aproveitar</small></div></div>
         <h1 className="serif">{title}</h1>
         <p className="muted" style={{ margin: 0 }}>{sub}</p>
